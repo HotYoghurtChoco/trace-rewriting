@@ -143,7 +143,7 @@ def train_model(config, args):
         preprocess_function,
         batched=True,
         batch_size=16384,
-        num_proc=96,
+        num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")),
         remove_columns=list(dataset_raw.column_names),
         desc="Preprocessing train dataset",
         load_from_cache_file=True

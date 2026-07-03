@@ -108,7 +108,7 @@ def build_chat_prompts(dataset, dataset_name, tokenizer):
         texts = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         return {"input_ids": texts, "seq_lengths": [len(t) for t in texts]}
 
-    return dataset.map(preprocess, batched=True, num_proc=96, desc="Preprocessing", load_from_cache_file=True)
+    return dataset.map(preprocess, batched=True, num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")), desc="Preprocessing", load_from_cache_file=True)
 
 
 def main():

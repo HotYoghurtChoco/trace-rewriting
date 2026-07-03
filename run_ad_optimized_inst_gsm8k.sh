@@ -49,6 +49,7 @@ NUM_GPUS=${NUM_GPUS:-2}
 DATASET=gsm8k
 RUN=${RUN:-ad_optimized_inst_gsm8k}
 STUDENT_MODEL=${STUDENT_MODEL:-meta-llama/Llama-3.2-3B}
+STUDENT_TOKENIZER=${STUDENT_TOKENIZER:-meta-llama/Llama-3.2-3B-Instruct}
 
 VLLM_PORT=${VLLM_PORT:-8000}
 VLLM_READY_TIMEOUT=${VLLM_READY_TIMEOUT:-1800}
@@ -177,6 +178,7 @@ echo "Dataset        : ${DATASET} (full train + test splits)"
 echo "Teacher        : ${TEACHER}"
 echo "Rewriter       : ${REWRITER}"
 echo "Student        : ${STUDENT_MODEL}"
+echo "Tokenizer      : ${STUDENT_TOKENIZER}"
 echo "Num GPUs       : ${NUM_GPUS}"
 echo "Scratch run    : ${SCRATCH_RUN}"
 echo "HF_HOME        : ${HF_HOME}"
@@ -212,6 +214,7 @@ echo "[3/5] Distilling student ${STUDENT_MODEL} on rewritten traces"
 accelerate launch --num_processes "${NUM_GPUS}" src/distill.py \
     --config config/distill.yaml \
     --student_model_name "${STUDENT_MODEL}" \
+    --tokenizer_name "${STUDENT_TOKENIZER}" \
     --data_dir "${TRACES}" \
     --trace_colname rewrite_trace \
     --lora \

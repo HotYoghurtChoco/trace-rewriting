@@ -1,0 +1,112 @@
+===== Official commit =====
+commit a2afa048f6967badf9d4894c912469547eafd452
+Author:     Owen Ma <m.owen@wustl.edu>
+AuthorDate: Fri Jun 12 14:44:28 2026 -0500
+Commit:     Owen Ma <m.owen@wustl.edu>
+CommitDate: Fri Jun 12 14:44:28 2026 -0500
+
+    Add watermarking pipeline and expand README with experiment instructions
+    
+    - Add config/watermark.yaml and config/distill_watermark.yaml for end-to-end watermark experiments
+    - Rename backdoor/fingerprint terminology to watermark throughout (watermark_token, watermark_ratio)
+    - Fix distill.py diagnostic that hardcoded the string 'watermarked' instead of reading watermark_token from config
+    - Add watermark injection rate log to generate.py
+    - Expand README with step-by-step instructions for both anti-distillation and watermarking experiments
+    
+    Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+===== Katana compatibility commit =====
+commit 5db00388001ecb3d795b02b62aa95b54be998974
+Author:     Hongyan Chen <hongyanchen9695@gmail.com>
+AuthorDate: Fri Jul 3 11:27:53 2026 +1000
+Commit:     Hongyan Chen <hongyanchen9695@gmail.com>
+CommitDate: Fri Jul 3 11:27:53 2026 +1000
+
+    Add Katana compatibility for tokenizer and preprocessing
+
+===== Changed files =====
+M	run_ad_optimized_inst_gsm8k.sh
+M	src/distill.py
+M	src/evaluate.py
+
+===== Change summary =====
+ run_ad_optimized_inst_gsm8k.sh | 3 +++
+ src/distill.py                 | 2 +-
+ src/evaluate.py                | 2 +-
+ 3 files changed, 5 insertions(+), 2 deletions(-)
+
+===== Full compatibility patch =====
+diff --git a/run_ad_optimized_inst_gsm8k.sh b/run_ad_optimized_inst_gsm8k.sh
+index 74155ff..b9fd1a4 100755
+--- a/run_ad_optimized_inst_gsm8k.sh
++++ b/run_ad_optimized_inst_gsm8k.sh
+@@ -47,10 +47,11 @@ SCRATCH_BASE=${SCRATCH_BASE:-/tmp/trace-rewriting-cache}
+ NUM_GPUS=${NUM_GPUS:-2}
+ 
+ DATASET=gsm8k
+ RUN=${RUN:-ad_optimized_inst_gsm8k}
+ STUDENT_MODEL=${STUDENT_MODEL:-meta-llama/Llama-3.2-3B}
++STUDENT_TOKENIZER=${STUDENT_TOKENIZER:-meta-llama/Llama-3.2-3B-Instruct}
+ 
+ VLLM_PORT=${VLLM_PORT:-8000}
+ VLLM_READY_TIMEOUT=${VLLM_READY_TIMEOUT:-1800}
+ VLLM_EXTRA_ARGS=${VLLM_EXTRA_ARGS:-}
+ 
+@@ -175,10 +176,11 @@ start_vllm() {
+ echo "=========================================================="
+ echo "Dataset        : ${DATASET} (full train + test splits)"
+ echo "Teacher        : ${TEACHER}"
+ echo "Rewriter       : ${REWRITER}"
+ echo "Student        : ${STUDENT_MODEL}"
++echo "Tokenizer      : ${STUDENT_TOKENIZER}"
+ echo "Num GPUs       : ${NUM_GPUS}"
+ echo "Scratch run    : ${SCRATCH_RUN}"
+ echo "HF_HOME        : ${HF_HOME}"
+ echo "VLLM_CACHE_ROOT: ${VLLM_CACHE_ROOT}"
+ echo "vLLM endpoint  : ${OPENAI_BASE_URL}"
+@@ -210,10 +212,11 @@ fi
+ 
+ echo "[3/5] Distilling student ${STUDENT_MODEL} on rewritten traces"
+ accelerate launch --num_processes "${NUM_GPUS}" src/distill.py \
+     --config config/distill.yaml \
+     --student_model_name "${STUDENT_MODEL}" \
++    --tokenizer_name "${STUDENT_TOKENIZER}" \
+     --data_dir "${TRACES}" \
+     --trace_colname rewrite_trace \
+     --lora \
+     --output_dir "${STUDENT_OUT}"
+ 
+diff --git a/src/distill.py b/src/distill.py
+index 1fd7ace..da9d839 100644
+--- a/src/distill.py
++++ b/src/distill.py
+@@ -141,11 +141,11 @@ def train_model(config, args):
+ 
+     dataset = dataset_raw.map(
+         preprocess_function,
+         batched=True,
+         batch_size=16384,
+-        num_proc=96,
++        num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")),
+         remove_columns=list(dataset_raw.column_names),
+         desc="Preprocessing train dataset",
+         load_from_cache_file=True
+     )
+     train_token_length_stats = dataset.to_pandas()["token_lengths"].describe()
+diff --git a/src/evaluate.py b/src/evaluate.py
+index bad28a7..71b3086 100644
+--- a/src/evaluate.py
++++ b/src/evaluate.py
+@@ -106,11 +106,11 @@ def build_chat_prompts(dataset, dataset_name, tokenizer):
+             {"role": "user", "content": problem.strip() + "\n"},
+         ] for problem in examples["problem"]]
+         texts = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+         return {"input_ids": texts, "seq_lengths": [len(t) for t in texts]}
+ 
+-    return dataset.map(preprocess, batched=True, num_proc=96, desc="Preprocessing", load_from_cache_file=True)
++    return dataset.map(preprocess, batched=True, num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")), desc="Preprocessing", load_from_cache_file=True)
+ 
+ 
+ def main():
+     args = parse_args()
+     init(args.seed)

@@ -1,0 +1,104 @@
+sample_count: 1209
+pattern_order: base-clean-rewrite
+models:
+  base:
+    raw_correct: 18
+    raw_accuracy_percent: 1.4888
+    af_correct: 47
+    af_accuracy_percent: 3.8875
+    raw_wrong_af_correct: 29
+    raw_correct_af_wrong: 0
+    net_af_gain: 29
+  clean:
+    raw_correct: 710
+    raw_accuracy_percent: 58.7262
+    af_correct: 717
+    af_accuracy_percent: 59.3052
+    raw_wrong_af_correct: 8
+    raw_correct_af_wrong: 1
+    net_af_gain: 7
+  rewrite:
+    raw_correct: 59
+    raw_accuracy_percent: 4.8801
+    af_correct: 107
+    af_accuracy_percent: 8.8503
+    raw_wrong_af_correct: 48
+    raw_correct_af_wrong: 0
+    net_af_gain: 48
+raw_patterns:
+  '000':
+    count: 480
+    percent: 39.7022
+  '001':
+    count: 16
+    percent: 1.3234
+  '010':
+    count: 652
+    percent: 53.9289
+  '011':
+    count: 43
+    percent: 3.5567
+  '100':
+    count: 3
+    percent: 0.2481
+  '110':
+    count: 15
+    percent: 1.2407
+af_patterns:
+  '000':
+    count: 455
+    percent: 37.6344
+  '001':
+    count: 23
+    percent: 1.9024
+  '010':
+    count: 608
+    percent: 50.2895
+  '011':
+    count: 76
+    percent: 6.2862
+  '100':
+    count: 10
+    percent: 0.8271
+  '101':
+    count: 4
+    percent: 0.3309
+  '110':
+    count: 29
+    percent: 2.3987
+  '111':
+    count: 4
+    percent: 0.3309
+clean_vs_rewrite:
+  raw:
+    both_correct: 43
+    clean_only: 667
+    rewrite_only: 16
+    both_wrong: 483
+  answer_forced:
+    both_correct: 80
+    clean_only: 637
+    rewrite_only: 27
+    both_wrong: 465
+base_vs_clean:
+  raw:
+    both_correct: 15
+    base_only: 3
+    clean_only: 695
+    both_wrong: 496
+  answer_forced:
+    both_correct: 33
+    base_only: 14
+    clean_only: 684
+    both_wrong: 478
+base_vs_rewrite:
+  raw:
+    both_correct: 0
+    base_only: 18
+    rewrite_only: 59
+    both_wrong: 1132
+  answer_forced:
+    both_correct: 8
+    base_only: 39
+    rewrite_only: 99
+    both_wrong: 1063

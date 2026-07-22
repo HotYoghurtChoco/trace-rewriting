@@ -1,0 +1,53 @@
+sample_count: 1209
+category_counts:
+  clean_correct_rewrite_wrong: 667
+  clean_wrong_rewrite_wrong: 483
+  rewrite_raw_correct: 59
+  rewrite_rescued_by_af: 48
+error_marker_statistics:
+  assistant_marker:
+    count: 1209
+    percent: 100.0
+    rewrite_raw_accuracy_with_flag: 0.04880066170388751
+    rewrite_raw_accuracy_without_flag: null
+    rewrite_af_accuracy_with_flag: 0.08850289495450786
+  multiple_boxed_answers:
+    count: 1209
+    percent: 100.0
+    rewrite_raw_accuracy_with_flag: 0.04880066170388751
+    rewrite_raw_accuracy_without_flag: null
+    rewrite_af_accuracy_with_flag: 0.08850289495450786
+  many_boxed_answers:
+    count: 1209
+    percent: 100.0
+    rewrite_raw_accuracy_with_flag: 0.04880066170388751
+    rewrite_raw_accuracy_without_flag: null
+    rewrite_af_accuracy_with_flag: 0.08850289495450786
+  replacement_character:
+    count: 1208
+    percent: 99.9173
+    rewrite_raw_accuracy_with_flag: 0.048841059602649006
+    rewrite_raw_accuracy_without_flag: 0.0
+    rewrite_af_accuracy_with_flag: 0.08857615894039735
+  foreign_script_fragment:
+    count: 1208
+    percent: 99.9173
+    rewrite_raw_accuracy_with_flag: 0.048841059602649006
+    rewrite_raw_accuracy_without_flag: 0.0
+    rewrite_af_accuracy_with_flag: 0.08857615894039735
+  high_line_repetition:
+    count: 1174
+    percent: 97.105
+    rewrite_raw_accuracy_with_flag: 0.049403747870528106
+    rewrite_raw_accuracy_without_flag: 0.02857142857142857
+    rewrite_af_accuracy_with_flag: 0.08858603066439523
+  any_corruption_marker:
+    count: 1209
+    percent: 100.0
+    rewrite_raw_accuracy_with_flag: 0.04880066170388751
+    rewrite_raw_accuracy_without_flag: null
+    rewrite_af_accuracy_with_flag: 0.08850289495450786
+maximum_counts:
+  assistant_count: 67
+  boxed_count: 103
+  repetition_score: 0.7279411764705883

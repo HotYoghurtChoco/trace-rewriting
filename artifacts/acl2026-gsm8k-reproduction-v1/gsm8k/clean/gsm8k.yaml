@@ -1,0 +1,18 @@
+seed: 888
+model_name_or_path: /srv/scratch/z5463756/honour/trace-rewriting-formal/runs/gsm8k/clean/student/final_model
+tokenizer_name_or_path: /srv/scratch/z5463756/honour/trace-rewriting-formal/runs/gsm8k/clean/student/final_model
+trace_save_path: /srv/scratch/z5463756/honour/trace-rewriting-formal/runs/gsm8k/clean/eval/gsm8k
+dataset: gsm8k_test
+temperature: 0.6
+raw_accuracy: 0.587262200165426
+af_accuracy: 0.5930521091811415
+mmlu_subject_accuracies: null
+trace_len_stats:
+  count: 1209.0
+  mean: 953.6261373035567
+  std: 189.06616762423914
+  min: 213.0
+  25%: 1013.0
+  50%: 1019.0
+  75%: 1022.0
+  max: 1033.0

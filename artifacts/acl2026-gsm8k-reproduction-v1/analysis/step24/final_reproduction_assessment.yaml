@@ -1,0 +1,135 @@
+status: core_experiment_successfully_reproduced
+
+comparison_target:
+  publication: ACL 2026 final publication
+  experiment: >
+    GSM8K optimized trace rewriting anti-distillation experiment
+    with Llama-3.2-3B as the student
+  primary_metric: answer-forced zero-shot accuracy
+
+official_results_percent:
+  clean: 57.7
+  optimized_rewrite: 8.6
+  absolute_drop_percentage_points: 49.1
+  relative_reduction_percent: 85.0953
+
+reproduction_results_percent:
+  base_raw: 1.4888
+  base_answer_forced: 3.8875
+  clean_raw: 58.7262
+  clean_answer_forced: 59.3052
+  rewrite_raw: 4.8801
+  rewrite_answer_forced: 8.8503
+  absolute_drop_percentage_points: 50.4549
+  relative_reduction_percent: 85.0767
+
+difference_reproduction_minus_official:
+  clean_answer_forced_percentage_points: 1.6052
+  rewrite_answer_forced_percentage_points: 0.2503
+  absolute_drop_percentage_points: 1.3549
+  relative_reduction_percentage_points: -0.0186
+
+methodological_alignment:
+  assessment: strong
+  matched_components:
+    - Llama-3.2-3B student architecture
+    - 5231 GSM8K training examples
+    - 1209 GSM8K-Platinum test examples
+    - official original and optimized rewrite traces
+    - LoRA rank 128
+    - LoRA alpha 128
+    - LoRA dropout 0
+    - four training epochs
+    - learning rate 5e-4
+    - global batch size 32
+    - weight decay 0.1
+    - cosine learning-rate scheduler
+    - warmup ratio 0.1
+    - maximum gradient norm 1.0
+    - answer-forcing evaluation
+    - Math-Verify correctness evaluation
+
+controlled_comparison:
+  clean_trace_column: original_trace
+  rewrite_trace_column: rewrite_trace
+  conclusion: >
+    Clean and Rewrite used the same model, tokenizer, dataset size,
+    evaluation set, seed, and training hyperparameters. The source
+    reasoning-trace column was the only core experimental variable.
+
+documented_differences:
+  preprocessing_parallelism:
+    official_code: 96 processes
+    reproduction: 4 processes
+    assessment: >
+      Operational compatibility change affecting preprocessing speed,
+      not dataset contents, training logic, or evaluation logic.
+
+  tokenizer_override:
+    student_model: meta-llama/Llama-3.2-3B
+    tokenizer: meta-llama/Llama-3.2-3B-Instruct
+    assessment: >
+      Compatibility change enabling the required chat template.
+      It may contribute to small absolute accuracy differences, but
+      it was applied identically to Clean and Rewrite.
+
+  hardware:
+    reproduction: one GPU per experiment
+    assessment: >
+      This does not change the effective global batch size or core
+      training configuration.
+
+reproduction_scope:
+  reproduced:
+    - full GSM8K Clean student training
+    - full GSM8K optimized Rewrite student training
+    - full GSM8K-Platinum evaluation
+    - raw and answer-forced accuracy
+    - correctness-overlap analysis
+    - token-cap analysis
+    - rewrite-output degeneration analysis
+    - representative-case analysis
+
+  not_reproduced:
+    - regeneration of original traces using the teacher model
+    - regeneration of optimized traces using the 120B rewriter
+    - prompt-optimization procedure
+    - Semantic rewriting experiment
+    - gradient-based rewriting experiments
+    - ADS and DOGe baselines
+    - MATH experiments
+    - MMLU and MMLU-Pro experiments
+    - other student model architectures
+    - answer-only distillation
+    - adaptive attacks such as paraphrasing and KPOD
+    - teacher and rewriter size ablations
+    - rewritten-teacher-trace quality evaluation
+    - API watermarking experiments
+
+interpretation:
+  quantitative: >
+    The reproduced Clean and Rewrite answer-forced accuracies are
+    close to the ACL publication. The relative reduction in student
+    accuracy is nearly identical to the official result.
+
+  qualitative: >
+    The Rewrite student exhibited widespread repetitive and corrupted
+    generation behavior. This provides qualitative evidence consistent
+    with the rewritten traces substantially degrading downstream student
+    usefulness, without by itself establishing the internal causal mechanism.
+
+  limitation: >
+    Because official pre-generated traces were used, this reproduction
+    validates the student-distillation and evaluation stages of the
+    pipeline, but it does not independently reproduce teacher trace
+    generation, rewrite generation, or prompt optimization.
+
+final_conclusion: >
+  The core ACL 2026 GSM8K optimized trace-rewriting anti-distillation
+  result was successfully reproduced. The reproduced answer-forced
+  Clean accuracy was 59.3052% compared with the official 57.7%, and
+  the reproduced Rewrite accuracy was 8.8503% compared with the
+  official 8.6%. The resulting relative performance reduction was
+  85.0767%, nearly identical to the official 85.0953%. The result is
+  therefore both directionally and quantitatively consistent with the
+  published core experiment.

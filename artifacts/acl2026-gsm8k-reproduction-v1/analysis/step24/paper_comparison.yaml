@@ -1,0 +1,32 @@
+experiment:
+  dataset: GSM8K-Platinum
+  student: meta-llama/Llama-3.2-3B
+  primary_metric: answer-forced accuracy
+
+paper:
+  clean_accuracy_percent: 57.7
+  rewrite_opt_accuracy_percent: 8.6
+  absolute_drop_percentage_points: 49.1
+  relative_reduction_percent: 85.0953
+
+reproduction:
+  base_raw_accuracy_percent: 1.4888
+  base_af_accuracy_percent: 3.8875
+  clean_raw_accuracy_percent: 58.7262
+  clean_af_accuracy_percent: 59.3052
+  rewrite_raw_accuracy_percent: 4.8801
+  rewrite_af_accuracy_percent: 8.8503
+  absolute_drop_percentage_points: 50.4549
+  relative_reduction_percent: 85.0767
+
+difference_reproduction_minus_paper:
+  clean_accuracy_percentage_points: 1.6052
+  rewrite_accuracy_percentage_points: 0.2503
+  absolute_drop_percentage_points: 1.3549
+  relative_reduction_percentage_points: -0.0186
+
+preliminary_conclusion: >
+  The core GSM8K anti-distillation result is successfully reproduced.
+  The reproduced answer-forced clean and rewritten student accuracies
+  closely match the paper, and the relative student-performance
+  reduction is nearly identical.

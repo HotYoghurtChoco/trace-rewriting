@@ -1,0 +1,79 @@
+comparison_target:
+  publication: ACL 2026 final publication
+  experiment: GSM8K optimized trace rewriting
+  student_model: meta-llama/Llama-3.2-3B
+  metric: answer-forced zero-shot accuracy
+
+repository:
+  official_commit: a2afa048f6967badf9d4894c912469547eafd452
+  reproduction_commit: 5db00388001ecb3d795b02b62aa95b54be998974
+  reproduction_branch: reproduction/katana-compat
+
+strict_matches:
+  training_examples: 5231
+  evaluation_dataset: GSM8K-Platinum test
+  evaluation_examples: 1209
+  student_model: meta-llama/Llama-3.2-3B
+  lora_rank: 128
+  lora_alpha: 128
+  lora_dropout: 0.0
+  epochs: 4
+  learning_rate: 5e-4
+  per_device_batch_size: 2
+  global_batch_size: 32
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+  scheduler: cosine
+  warmup_ratio: 0.1
+  seed_clean: 888
+  seed_rewrite: 888
+
+controlled_experiment:
+  clean_trace_column: original_trace
+  rewrite_trace_column: rewrite_trace
+  assessment: >
+    Clean and Rewrite use identical models, tokenizers, datasets,
+    seeds, and training hyperparameters. The reasoning-trace column
+    is the only core experimental variable.
+
+katana_compatibility_changes:
+  preprocessing_processes:
+    official_value: 96
+    reproduction_default: 4
+    affected_files:
+      - src/distill.py
+      - src/evaluate.py
+    expected_effect: >
+      Changes preprocessing parallelism and runtime only. It does not
+      change preprocessing logic, dataset contents, training parameters,
+      or evaluation rules.
+
+  tokenizer_override:
+    model: meta-llama/Llama-3.2-3B
+    tokenizer: meta-llama/Llama-3.2-3B-Instruct
+    affected_file:
+      - run_ad_optimized_inst_gsm8k.sh
+    expected_effect: >
+      Provides a compatible chat tokenizer and template for the base
+      student model. It may slightly affect absolute results through
+      formatting or tokenization, but it is applied identically to the
+      Clean and Rewrite experiments and therefore preserves the
+      controlled comparison.
+
+unchanged_core_components:
+  - official distillation hyperparameters
+  - model architecture
+  - training dataset size
+  - GSM8K-Platinum evaluation set
+  - trace contents
+  - answer-forcing evaluation
+  - correctness evaluation
+  - Clean versus Rewrite experimental design
+
+assessment: >
+  The Katana compatibility patch does not alter the core anti-distillation
+  methodology. The reduced preprocessing process count is operational only.
+  The tokenizer override is a documented compatibility difference that may
+  contribute to small absolute accuracy differences, but it is controlled
+  across Clean and Rewrite. The reproduction remains methodologically
+  comparable with the ACL 2026 core experiment.

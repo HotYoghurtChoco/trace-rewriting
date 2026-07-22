@@ -1,0 +1,18 @@
+seed: 888
+model_name_or_path: meta-llama/Llama-3.2-3B
+tokenizer_name_or_path: meta-llama/Llama-3.2-3B-Instruct
+trace_save_path: /srv/scratch/z5463756/honour/trace-rewriting-formal/runs/gsm8k/base/eval/gsm8k
+dataset: gsm8k_test
+temperature: 0.6
+raw_accuracy: 0.01488833746898263
+af_accuracy: 0.03887510339123242
+mmlu_subject_accuracies: null
+trace_len_stats:
+  count: 1209.0
+  mean: 826.6840363937138
+  std: 392.4917885228508
+  min: 1.0
+  25%: 1023.0
+  50%: 1025.0
+  75%: 1025.0
+  max: 3921.0

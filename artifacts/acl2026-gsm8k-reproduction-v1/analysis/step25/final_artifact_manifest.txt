@@ -1,0 +1,125 @@
+Trace Rewriting Final Artifact Manifest
+================================================================================
+Generated UTC: 2026-07-16T09:03:09.554031+00:00
+Tracked files: 30
+Note: The manifest does not hash itself.
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/base/gsm8k.jsonl
+SIZE:   15701973 bytes
+SHA256: dbab2f42c190c74ddd9671429b12ba4468c70c584d4d515f15b9a080648250cf
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/base/gsm8k.yaml
+SIZE:   492 bytes
+SHA256: 6aa5a5ed885fb86cf109dae656be6a65985a0e3e88ce6068b2608696a422327b
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/base/run_metadata.txt
+SIZE:   266 bytes
+SHA256: 2eaa2d4f77fff4abbba1047f591c787c68b2c1217c9fc94d6d348a3de69e5999
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/base/SHA256SUMS
+SIZE:   269 bytes
+SHA256: 7ca4baede5cfb56077ceebf674c8932293c87f900802699ab636e0839b46ad96
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/clean/gsm8k.jsonl
+SIZE:   9280695 bytes
+SHA256: 01b0e7ab1752616df297114c2f7fd5ddb89688acbf6f0f902e81ba4b4024646d
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/clean/gsm8k.yaml
+SIZE:   614 bytes
+SHA256: 303ac943245db0b34ad01c9c15b981cf15161f841d1053fed4c8c38d7ce90363
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/clean/distill_config.yaml
+SIZE:   218 bytes
+SHA256: 05aec2947f2319a244b441d2cab31f8a34b02646e7daf6e64b9546a6cbf93385
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/clean/run_metadata.txt
+SIZE:   334 bytes
+SHA256: f1fab0dee4f90c911df7fd4134bb1b6333d2dffe88022e54ace587483aca57db
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/clean/SHA256SUMS
+SIZE:   415 bytes
+SHA256: 3196d15a404fbd22a6e52afec0424a9a77beb0be4f89cdfc44e9ce9238a3ff56
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/rewrite/gsm8k.jsonl
+SIZE:   10297643 bytes
+SHA256: 292dd18d2df0d4066c265f3c0696d889925f0fb6f5c4bbfbc89e8d4775d7289c
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/rewrite/gsm8k.yaml
+SIZE:   620 bytes
+SHA256: 051fbbd2f6eac4c8a2bae330eb0cdfc59ced8315150ad92af599570150f91896
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/rewrite/distill_config.yaml
+SIZE:   218 bytes
+SHA256: 05aec2947f2319a244b441d2cab31f8a34b02646e7daf6e64b9546a6cbf93385
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/rewrite/run_metadata.txt
+SIZE:   335 bytes
+SHA256: 2099b764f2337cc423447443997710b4d88230668ecc655319de56f5105bb92d
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/gsm8k/rewrite/SHA256SUMS
+SIZE:   421 bytes
+SHA256: a11bdc5007c111c10d0e285346973651ecff4918413833d5a6fca129cc828cf4
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/correctness_overlap.yaml
+SIZE:   1872 bytes
+SHA256: de635c2e20ee94a7e8c9b845227487c5e0cd98a5f3bd5f7ad2766f69fee325a1
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/token_cap_summary.yaml
+SIZE:   4780 bytes
+SHA256: 462d3fa332cc9832d2736c3e8fade9060277ed3a4b1bd2bd0e2d7b031838f38c
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/token_cap_per_example.csv
+SIZE:   2757656 bytes
+SHA256: c9bad305663a682d3f9b0dcb8878715c2aad5b376f13ea9feafd12f88083fd2d
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/rewrite_error_census.yaml
+SIZE:   1799 bytes
+SHA256: dd4a10c2ed5f3d9abfabe85af0b070bb67ec8c3693ba523f249cae10ea4c96b7
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/representative_candidates.jsonl
+SIZE:   6712413 bytes
+SHA256: d3deecc4627c49bfcf61cc407e5ac478df8855f80f097fa38d9e7a70e4c458ba
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/final_representative_cases.jsonl
+SIZE:   71233 bytes
+SHA256: 19be204a4b15c3ff11ec53936efa81016d9fc0417c17731072ad3c4657ee749c
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step23/final_representative_cases.txt
+SIZE:   15582 bytes
+SHA256: beb3df451b6ca69eac26781d6c5e81453817fcbfe3f3851d4b19d39d9007738b
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step24/paper_comparison.yaml
+SIZE:   1066 bytes
+SHA256: f89f4bfe3d0967777346b253c34023dd730a613761ae48b568a8826238982fe5
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step24/config_file_inventory.txt
+SIZE:   1052 bytes
+SHA256: 7e1c60f62aa8ea9a2a773145c55c1209ac45ae3956e1f398854d5160bf3514ea
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step24/local_configuration_audit.txt
+SIZE:   1546 bytes
+SHA256: 27b98eca10711ee448b8341f5617d11395d1a56c0c51f6424f340db068cbd543
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step24/compatibility_patch_audit.txt
+SIZE:   4488 bytes
+SHA256: 780d408617f9bb4e4a2ea6510ab7b0f29ffab40391bc37b011e2fca0191d5bea
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step24/configuration_assessment.yaml
+SIZE:   2649 bytes
+SHA256: 876f9d509e004c3e4914805e81e3860244c8c9a06c46e8fb84319d738cf2225a
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step24/final_reproduction_assessment.yaml
+SIZE:   4840 bytes
+SHA256: fbaa53cf49fdfcb17a1026e602d2b08cd4f8435aae2372ca1fedd6d3a76f06f8
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step25/final_reproduction_summary.md
+SIZE:   9652 bytes
+SHA256: 45f2ba2d2276b05f056eed2905a8c8d239e510de2bc18b64b1762ede0d238393
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step25/thesis_integration.md
+SIZE:   10277 bytes
+SHA256: 59e082e745c49a4a2c828adb75326c487613cca772c9d94e96ea7becdc4e01bf
+
+PATH:   /home/z5463756/honour/results/trace-rewriting/analysis/step25/final_validation.txt
+SIZE:   3987 bytes
+SHA256: f056f80304bcd2e22c7355cccfe6b1c8c5f48cb9b331ae61707acfe591c87b98

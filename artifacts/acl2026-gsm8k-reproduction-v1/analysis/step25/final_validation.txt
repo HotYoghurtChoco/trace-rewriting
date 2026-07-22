@@ -1,0 +1,93 @@
+Trace Rewriting Final Validation
+================================================================================
+Generated UTC: 2026-07-16T09:03:09.554031+00:00
+Total checks:  42
+Passed:        42
+Failed:        0
+
+[PASS] All required artifacts exist
+       29 of 29 files present
+[PASS] All important YAML files parse successfully
+       11 YAML files parsed
+[PASS] Recalculated accuracy: base_raw
+       saved=1.4888%, recalculated=1.4888%
+[PASS] Recalculated accuracy: base_answer_forced
+       saved=3.8875%, recalculated=3.8875%
+[PASS] Recalculated accuracy: clean_raw
+       saved=58.7262%, recalculated=58.7262%
+[PASS] Recalculated accuracy: clean_answer_forced
+       saved=59.3052%, recalculated=59.3052%
+[PASS] Recalculated accuracy: rewrite_raw
+       saved=4.8801%, recalculated=4.8801%
+[PASS] Recalculated accuracy: rewrite_answer_forced
+       saved=8.8503%, recalculated=8.8503%
+[PASS] Reproduction absolute drop
+       saved=50.4549 pp, recalculated=50.4549 pp
+[PASS] Reproduction relative reduction
+       saved=85.0767%, recalculated=85.0767%
+[PASS] Official absolute drop
+       saved=49.1000 pp, recalculated=49.1000 pp
+[PASS] Official relative reduction
+       saved=85.0953%, recalculated=85.0953%
+[PASS] Paper-comparison difference: clean_answer_forced_percentage_points
+       saved=+1.6052, recalculated=+1.6052
+[PASS] Paper-comparison difference: rewrite_answer_forced_percentage_points
+       saved=+0.2503, recalculated=+0.2503
+[PASS] Paper-comparison difference: absolute_drop_percentage_points
+       saved=+1.3549, recalculated=+1.3549
+[PASS] Paper-comparison difference: relative_reduction_percentage_points
+       saved=-0.0186, recalculated=-0.0186
+[PASS] Final summary contains: Clean AF accuracy: 59.3052%
+       Clean AF accuracy: 59.3052%
+[PASS] Final summary contains: Rewrite AF accuracy: 8.8503%
+       Rewrite AF accuracy: 8.8503%
+[PASS] Final summary contains: relative reduction: 85.0767%
+       relative reduction: 85.0767%
+[PASS] Final summary contains: ## 11. Final conclusion
+       ## 11. Final conclusion
+[PASS] Thesis section exists: ## Experimental Methodology
+       ## Experimental Methodology
+[PASS] Thesis section exists: ## Experimental Setup
+       ## Experimental Setup
+[PASS] Thesis section exists: ## Implementation Environment
+       ## Implementation Environment
+[PASS] Thesis section exists: ## Main Results
+       ## Main Results
+[PASS] Thesis section exists: ## Comparison with the Published Result
+       ## Comparison with the Published Result
+[PASS] Thesis section exists: ## Correctness-Overlap Analysis
+       ## Correctness-Overlap Analysis
+[PASS] Thesis section exists: ## Token-Cap Analysis
+       ## Token-Cap Analysis
+[PASS] Thesis section exists: ## Rewrite-Output Degeneration
+       ## Rewrite-Output Degeneration
+[PASS] Thesis section exists: ## Discussion
+       ## Discussion
+[PASS] Thesis section exists: ## Limitations
+       ## Limitations
+[PASS] Thesis section exists: ## Reproducibility Statement
+       ## Reproducibility Statement
+[PASS] Thesis comparison row exists
+       | Clean AF accuracy | 57.7000% | 59.3052% | +1.6052 pp |
+[PASS] Thesis comparison row exists
+       | Rewrite AF accuracy | 8.6000% | 8.8503% | +0.2503 pp |
+[PASS] Thesis comparison row exists
+       | Absolute accuracy drop | 49.1000 pp | 50.4549 pp | +1.3549 pp |
+[PASS] Thesis comparison row exists
+       | Relative reduction | 85.0953% | 85.0767% | -0.0186 pp |
+[PASS] No accidental text matching: \{reproduction\[
+       not found
+[PASS] No accidental text matching: \{official\[
+       not found
+[PASS] No accidental text matching: \{difference\[
+       not found
+[PASS] No accidental text matching: \{markers\[
+       not found
+[PASS] No accidental text matching: percentage_poircentage_points
+       not found
+[PASS] No accidental text matching: oircentage_points
+       not found
+[PASS] Final reproduction status
+       core_experiment_successfully_reproduced
+
+FINAL STATUS: PASS - REPRODUCTION ARCHIVE VALIDATED

@@ -1,0 +1,148 @@
+tokenizer: /srv/scratch/z5463756/honour/trace-rewriting-formal/runs/gsm8k/clean/student/final_model
+generation_cap: 1024
+near_cap_threshold: 1000
+note: Lengths are obtained by re-tokenizing decoded output without special tokens.
+  Near-cap counts are a truncation proxy, not definitive proof that generation stopped
+  only because of the cap.
+models:
+  base:
+    raw:
+      count: 1209
+      mean_tokens: 825.6840363937138
+      std_tokens: 392.32943410493317
+      min_tokens: 0
+      p25_tokens: 1022.0
+      median_tokens: 1024.0
+      p75_tokens: 1024.0
+      p90_tokens: 1025.0
+      p95_tokens: 1027.0
+      max_tokens: 3920
+      near_cap_threshold: 1000
+      near_cap_count: 918
+      near_cap_percent: 75.93052109181141
+      exact_1024_count: 685
+      exact_1024_percent: 56.65839536807279
+      over_1024_count: 184
+      over_1024_percent: 15.2191894127378
+      overall_accuracy: 0.01488833746898263
+      near_cap_accuracy: 0.010893246187363835
+      below_near_cap_accuracy: 0.027491408934707903
+      correct_mean_tokens: 665.4444444444445
+      incorrect_mean_tokens: 828.1057934508816
+    answer_forced:
+      count: 1209
+      mean_tokens: 858.3374689826303
+      std_tokens: 393.8235743359901
+      min_tokens: 24
+      p25_tokens: 1035.0
+      median_tokens: 1064.0
+      p75_tokens: 1065.0
+      p90_tokens: 1066.0
+      p95_tokens: 1068.0
+      max_tokens: 3960
+      near_cap_threshold: 1000
+      near_cap_count: 918
+      near_cap_percent: 75.93052109181141
+      exact_1024_count: 0
+      exact_1024_percent: 0.0
+      over_1024_count: 917
+      over_1024_percent: 75.84780810587263
+      overall_accuracy: 0.03887510339123242
+      near_cap_accuracy: 0.030501089324618737
+      below_near_cap_accuracy: 0.06529209621993128
+      correct_mean_tokens: 714.7021276595744
+      incorrect_mean_tokens: 864.1471600688468
+  clean:
+    raw:
+      count: 1209
+      mean_tokens: 952.6261373035567
+      std_tokens: 188.98796031267202
+      min_tokens: 212
+      p25_tokens: 1012.0
+      median_tokens: 1018.0
+      p75_tokens: 1021.0
+      p90_tokens: 1024.0
+      p95_tokens: 1026.0
+      max_tokens: 1032
+      near_cap_threshold: 1000
+      near_cap_count: 1001
+      near_cap_percent: 82.79569892473118
+      exact_1024_count: 47
+      exact_1024_percent: 3.887510339123242
+      over_1024_count: 111
+      over_1024_percent: 9.181141439205955
+      overall_accuracy: 0.587262200165426
+      near_cap_accuracy: 0.5764235764235764
+      below_near_cap_accuracy: 0.6394230769230769
+      correct_mean_tokens: 942.7802816901409
+      incorrect_mean_tokens: 966.6352705410821
+    answer_forced:
+      count: 1209
+      mean_tokens: 992.5037220843673
+      std_tokens: 189.14182195279204
+      min_tokens: 252
+      p25_tokens: 1052.0
+      median_tokens: 1059.0
+      p75_tokens: 1062.0
+      p90_tokens: 1065.0
+      p95_tokens: 1066.0
+      max_tokens: 1072
+      near_cap_threshold: 1000
+      near_cap_count: 1066
+      near_cap_percent: 88.17204301075269
+      exact_1024_count: 0
+      exact_1024_percent: 0.0
+      over_1024_count: 1027
+      over_1024_percent: 84.94623655913979
+      overall_accuracy: 0.5930521091811415
+      near_cap_accuracy: 0.5844277673545967
+      below_near_cap_accuracy: 0.6573426573426573
+      correct_mean_tokens: 982.6234309623431
+      incorrect_mean_tokens: 1006.9024390243902
+  rewrite:
+    raw:
+      count: 1209
+      mean_tokens: 928.8511166253102
+      std_tokens: 26.164732338705964
+      min_tokens: 843
+      p25_tokens: 912.0
+      median_tokens: 932.0
+      p75_tokens: 947.0
+      p90_tokens: 960.0
+      p95_tokens: 967.0
+      max_tokens: 1004
+      near_cap_threshold: 1000
+      near_cap_count: 1
+      near_cap_percent: 0.0827129859387924
+      exact_1024_count: 0
+      exact_1024_percent: 0.0
+      over_1024_count: 0
+      over_1024_percent: 0.0
+      overall_accuracy: 0.04880066170388751
+      near_cap_accuracy: 0.0
+      below_near_cap_accuracy: 0.048841059602649006
+      correct_mean_tokens: 920.3898305084746
+      incorrect_mean_tokens: 929.2852173913044
+    answer_forced:
+      count: 1209
+      mean_tokens: 969.9023986765923
+      std_tokens: 26.13128531084067
+      min_tokens: 879
+      p25_tokens: 953.0
+      median_tokens: 973.0
+      p75_tokens: 988.0
+      p90_tokens: 1001.0
+      p95_tokens: 1008.0
+      max_tokens: 1045
+      near_cap_threshold: 1000
+      near_cap_count: 140
+      near_cap_percent: 11.579818031430934
+      exact_1024_count: 3
+      exact_1024_percent: 0.24813895781637718
+      over_1024_count: 9
+      over_1024_percent: 0.7444168734491315
+      overall_accuracy: 0.08850289495450786
+      near_cap_accuracy: 0.1
+      below_near_cap_accuracy: 0.08699719363891488
+      correct_mean_tokens: 972.0373831775701
+      incorrect_mean_tokens: 969.6950998185118

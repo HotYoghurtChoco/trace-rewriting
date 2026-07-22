@@ -1,0 +1,31 @@
+===== Repository =====
+branch=reproduction/katana-compat
+commit=5db00388001ecb3d795b02b62aa95b54be998974
+
+===== Repository status =====
+?? data/gsm8k/optimized/cache-00032befe7939432.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00000_of_00004.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00001_of_00004.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00002_of_00004.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00003_of_00004.arrow
+
+===== Repository configuration files =====
+/home/z5463756/honour/papers/trace-rewriting/config/distill_watermark.yaml
+/home/z5463756/honour/papers/trace-rewriting/config/distill.yaml
+/home/z5463756/honour/papers/trace-rewriting/config/generate.yaml
+/home/z5463756/honour/papers/trace-rewriting/config/optimize.yaml
+/home/z5463756/honour/papers/trace-rewriting/config/watermark.yaml
+
+===== Clean backup files =====
+distill_config.yaml
+gsm8k.jsonl
+gsm8k.yaml
+run_metadata.txt
+SHA256SUMS
+
+===== Rewrite backup files =====
+distill_config.yaml
+gsm8k.jsonl
+gsm8k.yaml
+run_metadata.txt
+SHA256SUMS

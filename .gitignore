@@ -15,3 +15,5 @@ debug_output/
 # Env / secrets
 .env
 hf_token*
+
+.venv/

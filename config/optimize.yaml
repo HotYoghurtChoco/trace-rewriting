@@ -6,7 +6,13 @@ eval_dataset_size_for_optimize: 100  # only relevant when using acc score
 score_type: acc  # loss, acc
 batch_size_for_scoring: 5 # ideally this is a divisor of (dataset_size_used_for_optimize / num_processes)
 rescore: false  # If true, will rescore all instructions even if they already have a score
-rewriter_model_name: deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+# Bump this value whenever Stage 6A data/model settings change.
+stage6a_protocol: paper_a2_accuracy_v1
+rewriter_model_name: openai/gpt-oss-120b
+rewrite_temperature: 0.6
+rewrite_max_tokens: 1024
+proxy_weight_decay: 0.1
+proxy_warmup_ratio: 0.1
 proxy_models:
   # - name: meta-llama/Llama-3.2-3B
   #   tokenizer: meta-llama/Llama-3.2-3B-Instruct
@@ -17,8 +23,8 @@ proxy_models:
   - name: Qwen/Qwen3-1.7B-Base
     tokenizer: Qwen/Qwen3-1.7B
 
-  - name: meta-llama/Llama-3.2-1B
-    tokenizer: meta-llama/Llama-3.2-1B-Instruct
+  - name: google/gemma-3-1b-pt
+    tokenizer: google/gemma-3-1b-it
     
 
 instruction_generation: 'You are a math teacher. You will be given a math problem and you will solve it step by step. You will output your final solution like \\boxed{{ANSWER}}. Be sure to include relevant units within the brackets and fully evaluate arithmetic expressions.'

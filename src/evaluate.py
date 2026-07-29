@@ -110,6 +110,98 @@ def build_chat_prompts(dataset, dataset_name, tokenizer):
 
     return dataset.map(preprocess, batched=True, num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")), desc="Preprocessing", load_from_cache_file=True)
 
+def evaluate_dataset_with_vllm(
+    model,
+    tokenizer,
+    dataset,
+    dataset_name,
+    temperature,
+    max_new_tokens,
+):
+    sampling_params = SamplingParams(
+        temperature=temperature,
+        top_p=0.95,
+        max_tokens=max_new_tokens,
+    )
+    sampling_params_af = SamplingParams(
+        temperature=0,
+        top_p=0.95,
+        max_tokens=32,
+    )
+
+    proc_dataset = build_chat_prompts(
+        dataset,
+        dataset_name,
+        tokenizer,
+    )
+
+    eg_solution = dataset[0]["solution"]
+    log_color(
+        f"### Problem:\n{dataset[0]['problem']}\n"
+        f"### Solution:\n{eg_solution}\n"
+        f"### Parsed ground truth: {parse(eg_solution)}",
+        title="First example",
+    )
+    log_color(proc_dataset[0]["input_ids"], title="Example input")
+
+    prompts = list(proc_dataset["input_ids"])
+    raw_outputs = model.generate(prompts, sampling_params)
+    raw_traces = [output.outputs[0].text for output in raw_outputs]
+
+    dataset = dataset.add_column("trace", raw_traces)
+    dataset = dataset.map(
+        is_correct,
+        fn_kwargs={"trace_colname": "trace"},
+        desc="Scoring raw",
+    ).rename_column("is_correct", "is_raw_correct")
+
+    force_str = (
+        MMLU_ANSWER_FORCE_STRING
+        if "mmlu" in dataset_name
+        else ANSWER_FORCE_STRING
+    )
+    af_inputs = [trace + force_str for trace in raw_traces]
+    log_color(af_inputs[0], title="Example input after answer-forcing")
+
+    af_outputs = model.generate(af_inputs, sampling_params_af)
+    af_traces = [
+        prefix + output.outputs[0].text
+        for prefix, output in zip(af_inputs, af_outputs)
+    ]
+
+    dataset = dataset.add_column("trace_af", af_traces)
+    dataset = dataset.map(
+        is_correct,
+        fn_kwargs={"trace_colname": "trace_af"},
+        desc="Scoring AF",
+    ).rename_column("is_correct", "is_af_correct")
+
+    torch.cuda.empty_cache()
+
+    df = dataset.to_pandas()
+    trace_len_stats = {
+        key: float(value)
+        for key, value in df["trace"]
+        .map(lambda trace: len(tokenizer.encode(trace)))
+        .describe()
+        .items()
+    }
+    raw_accuracy = float(df["is_raw_correct"].mean())
+    af_accuracy = float(df["is_af_correct"].mean())
+    mmlu_subject_acc = (
+        mmlu_acc_by_subject(dataset)
+        if "mmlu" in dataset_name
+        else None
+    )
+
+    metrics = {
+        "raw_accuracy": raw_accuracy,
+        "af_accuracy": af_accuracy,
+        "mmlu_subject_accuracies": mmlu_subject_acc,
+        "trace_len_stats": trace_len_stats,
+    }
+
+    return dataset, metrics
 
 def main():
     args = parse_args()
@@ -129,13 +221,11 @@ def main():
         use_fast=True,
         padding_side="left",
     )
-    sampling_params_af = SamplingParams(temperature=0, top_p=0.95, max_tokens=32)
 
     for dataset_name in args.dataset.split(","):
         save_path = os.path.join(args.out_dir, dataset_name)
         os.makedirs(args.out_dir, exist_ok=True)
         dataset, max_new_tokens = load_test_split(dataset_name)
-        sampling_params = SamplingParams(temperature=args.temperature, top_p=0.95, max_tokens=max_new_tokens)
 
         if args.debug:
             dataset = dataset.select(range(torch.cuda.device_count() * 2 * 64))
@@ -143,35 +233,20 @@ def main():
             dataset = dataset.select(range(min(args.num_samples, len(dataset))))
         logger.info(f"Evaluating on {dataset_name} ({len(dataset)} examples)")
 
-        proc_dataset = build_chat_prompts(dataset, dataset_name, tokenizer)
-        eg_solution = dataset[0]["solution"]
-        log_color(
-            f"### Problem:\n{dataset[0]['problem']}\n### Solution:\n{eg_solution}\n"
-            f"### Parsed ground truth: {parse(eg_solution)}",
-            title="First example",
+        dataset, metrics = evaluate_dataset_with_vllm(
+            model=model,
+            tokenizer=tokenizer,
+            dataset=dataset,
+            dataset_name=dataset_name,
+            temperature=args.temperature,
+            max_new_tokens=max_new_tokens,
         )
-        log_color(proc_dataset[0]["input_ids"], title="Example input")
-
-        prompts = list(proc_dataset["input_ids"])
-        raw_outputs = model.generate(prompts, sampling_params)
-        raw_traces = [o.outputs[0].text for o in raw_outputs]
-        dataset = dataset.add_column("trace", raw_traces)
-        dataset = dataset.map(is_correct, fn_kwargs={"trace_colname": "trace"}, desc="Scoring raw").rename_column("is_correct", "is_raw_correct")
-
-        force_str = MMLU_ANSWER_FORCE_STRING if "mmlu" in dataset_name else ANSWER_FORCE_STRING
-        af_inputs = [trace + force_str for trace in raw_traces]
-        log_color(af_inputs[0], title="Example input after answer-forcing")
-        af_outputs = model.generate(af_inputs, sampling_params_af)
-        af_traces = [prefix + o.outputs[0].text for prefix, o in zip(af_inputs, af_outputs)]
-        dataset = dataset.add_column("trace_af", af_traces)
-        dataset = dataset.map(is_correct, fn_kwargs={"trace_colname": "trace_af"}, desc="Scoring AF").rename_column("is_correct", "is_af_correct")
-        torch.cuda.empty_cache()
 
         df = dataset.to_pandas()
-        trace_len_stats = {k: float(v) for k, v in df["trace"].map(lambda x: len(tokenizer.encode(x))).describe().items()}
-        raw_accuracy = float(df["is_raw_correct"].mean())
-        af_accuracy = float(df["is_af_correct"].mean())
-        mmlu_subject_acc = mmlu_acc_by_subject(dataset) if "mmlu" in dataset_name else None
+        raw_accuracy = metrics["raw_accuracy"]
+        af_accuracy = metrics["af_accuracy"]
+        mmlu_subject_acc = metrics["mmlu_subject_accuracies"]
+        trace_len_stats = metrics["trace_len_stats"]
 
         log_color(
             f"Dataset: {dataset_name}, Raw Accuracy: {raw_accuracy:.4f}, AF Accuracy: {af_accuracy:.4f}\n"

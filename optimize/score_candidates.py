@@ -76,6 +76,96 @@ def _mark_model_complete(model_dir, cfg):
         f.write(f"{_stage6a_protocol(cfg)}\n")
 
 
+def _load_training_tokenizer(tokenizer_name):
+    tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer_name,
+        use_fast=True,
+        trust_remote_code=True,
+        padding_side="left",
+    )
+    if "llama" in tokenizer_name.lower():
+        tokenizer.pad_token_id = 128004
+        tokenizer.eos_token_id = 128001
+        tokenizer.add_eos_token = False
+    elif tokenizer.pad_token_id is None:
+        if tokenizer.eos_token_id is None:
+            raise ValueError(
+                f"Tokenizer {tokenizer_name} has neither a pad token "
+                "nor an EOS token that can be reused for padding."
+            )
+        tokenizer.pad_token = tokenizer.eos_token
+
+    if tokenizer.eos_token_id is None:
+        raise ValueError(f"Tokenizer {tokenizer_name} has no EOS token.")
+    return tokenizer
+
+
+def _align_model_special_tokens(model, tokenizer):
+    model.config.pad_token_id = tokenizer.pad_token_id
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.add_eos_token = False
+
+
+def _tokenize_completion_only_batch(
+    tokenizer,
+    instruction,
+    problems,
+    responses,
+    model_name,
+):
+    prompt_messages = [
+        [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": problem.strip()},
+        ]
+        for problem in problems
+    ]
+    full_messages = [
+        prompt
+        + [
+            {
+                "role": "assistant",
+                "content": response.strip(),
+            }
+        ]
+        for prompt, response in zip(
+            prompt_messages,
+            responses,
+            strict=True,
+        )
+    ]
+    prompt_tokens = tokenizer.apply_chat_template(
+        prompt_messages,
+        add_generation_prompt=True,
+    )
+    full_tokens = tokenizer.apply_chat_template(
+        full_messages,
+        add_generation_prompt=False,
+    )
+
+    completion_masks = []
+    for sample_index, (prompt_ids, full_ids) in enumerate(
+        zip(prompt_tokens, full_tokens, strict=True)
+    ):
+        if full_ids[:len(prompt_ids)] != prompt_ids:
+            raise ValueError(
+                f"Chat-template prefix mismatch for {model_name} "
+                f"at batch sample {sample_index}; cannot construct "
+                "a reliable completion-only loss mask."
+            )
+        completion_masks.append(
+            [0] * len(prompt_ids)
+            + [1] * (len(full_ids) - len(prompt_ids))
+        )
+
+    return {
+        "input_ids": full_tokens,
+        "completion_mask": completion_masks,
+    }
+
+
 def save_instruction_scores(instructions, save_path):
     payload = {
         "candidate_instructions": [
@@ -151,24 +241,7 @@ def warmup_models(cfg, accelerator):
         else:
             if accelerator.is_main_process: log.info(f"Warmup for model {model_name}... Will save to {final_model_dir}")
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name,
-            use_fast=True,
-            trust_remote_code=True,
-            padding_side="left",
-        )
-        if "llama" in tokenizer_name.lower():
-            eot_token_id = 128009
-            eos_token_id = 128001
-            tokenizer.pad_token_id = 128004
-            tokenizer.eos_token_id = eos_token_id
-            tokenizer.add_eos_token = False
-            eos_token = tokenizer.eos_token
-        else:
-            eos_token = tokenizer.eos_token
-            bos_token = tokenizer.bos_token or ""
-            special_tokens = {"pad_token": "[PAD]"}
-            tokenizer.add_special_tokens(special_tokens)
+        tokenizer = _load_training_tokenizer(tokenizer_name)
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             trust_remote_code=True,
@@ -176,22 +249,17 @@ def warmup_models(cfg, accelerator):
             dtype=torch.bfloat16,
             use_cache=True,
         )
-        model.generation_config.pad_token_id = tokenizer.pad_token_id
-        model.generation_config.add_eos_token = False
-        model.resize_token_embeddings(len(tokenizer))
+        _align_model_special_tokens(model, tokenizer)
 
         def preprocess_function(examples):
             trace_colname = 'original_trace'
-            suffix_len = -1 if "llama" in tokenizer_name.lower() else -2
-            # Create chat format messages for each example
-            messages = [[
-                {"role": "system", "content": cfg.instruction_generation},
-                {"role": "user", "content": problem.strip()},
-                {"role": "assistant", "content": response.strip()}]
-                for problem, response in zip(examples["problem"], examples[trace_colname])]
-            tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=False)
-            tokens = [toks[:suffix_len] for toks in tokens]
-            return {"input_ids": tokens}
+            return _tokenize_completion_only_batch(
+                tokenizer=tokenizer,
+                instruction=cfg.instruction_generation,
+                problems=examples["problem"],
+                responses=examples[trace_colname],
+                model_name=model_name,
+            )
 
         dataset = trace_dataset.map(
             preprocess_function,
@@ -200,7 +268,7 @@ def warmup_models(cfg, accelerator):
             num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")),
             remove_columns=list(trace_dataset.column_names),
             desc="Preprocessing train dataset",
-            load_from_cache_file=True
+            load_from_cache_file=False
         )
 
         peft_parameters = LoraConfig(
@@ -292,7 +360,7 @@ def warmup_models(cfg, accelerator):
                 return_dict=True,
                 device_map="cpu",
             )
-            base_model.resize_token_embeddings(len(tokenizer))
+            _align_model_special_tokens(base_model, tokenizer)
             adapter_dir = os.path.join(final_model_dir, "adapter")
             trainer.save_model(adapter_dir)
             model_to_merge = PeftModel.from_pretrained(base_model, adapter_dir)
@@ -629,24 +697,8 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 accelerator.wait_for_everyone()
                 continue
 
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_config["tokenizer"] if "tokenizer" in model_config else model_name,
-                use_fast=True,
-                trust_remote_code=True,
-                padding_side="left",
-            )
-            if "llama" in model_name.lower():
-                eot_token_id = 128009
-                eos_token_id = 128001
-                tokenizer.pad_token_id = 128004
-                tokenizer.eos_token_id = eos_token_id
-                tokenizer.add_eos_token = False
-                eos_token = tokenizer.eos_token
-            else:
-                eos_token = tokenizer.eos_token
-                bos_token = tokenizer.bos_token or ""
-                special_tokens = {"pad_token": "[PAD]"}
-                tokenizer.add_special_tokens(special_tokens)
+            tokenizer_name = model_config.get("tokenizer", model_name)
+            tokenizer = _load_training_tokenizer(tokenizer_name)
 
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
@@ -654,22 +706,17 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 attn_implementation="flash_attention_2",
                 dtype=torch.bfloat16
             )
-            model.generation_config.pad_token_id = tokenizer.pad_token_id
-            model.generation_config.add_eos_token = False
-            model.resize_token_embeddings(len(tokenizer))
+            _align_model_special_tokens(model, tokenizer)
 
             def preprocess_function(examples):
                 trace_colname = 'rewrite_trace'
-                suffix_len = -1 if "llama" in model_name.lower() else -2
-                # Create chat format messages for each example
-                messages = [[
-                    {"role": "system", "content": cfg.instruction_generation},
-                    {"role": "user", "content": problem.strip()},
-                    {"role": "assistant", "content": response.strip()}]
-                    for problem, response in zip(examples["problem"], examples[trace_colname])]
-                tokens = tokenizer.apply_chat_template(messages, add_generation_prompt=False)
-                tokens = [toks[:suffix_len] for toks in tokens]
-                return {"input_ids": tokens}
+                return _tokenize_completion_only_batch(
+                    tokenizer=tokenizer,
+                    instruction=cfg.instruction_generation,
+                    problems=examples["problem"],
+                    responses=examples[trace_colname],
+                    model_name=model_name,
+                )
 
             train_dataset = dataset.map(
                 preprocess_function,
@@ -678,7 +725,7 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 num_proc=int(os.environ.get("TRACE_NUM_PROC", "4")),
                 remove_columns=list(dataset.column_names),
                 desc="Preprocessing train dataset",
-                load_from_cache_file=True
+                load_from_cache_file=False
             )
 
             peft_parameters = LoraConfig(
@@ -759,7 +806,7 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                     return_dict=True,
                     device_map="cpu",
                 )
-                base_model.resize_token_embeddings(len(tokenizer))
+                _align_model_special_tokens(base_model, tokenizer)
                 adapter_dir = os.path.join(final_model_dir, "adapter")
                 trainer.save_model(adapter_dir)
                 model_to_merge = PeftModel.from_pretrained(base_model, adapter_dir)

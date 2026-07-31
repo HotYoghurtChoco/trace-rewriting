@@ -166,6 +166,76 @@ def _tokenize_completion_only_batch(
     }
 
 
+
+def _proxy_training_settings(cfg, accelerator, paper_accuracy_protocol):
+    """Resolve and validate proxy-training hyperparameters.
+
+    Accuracy-scoring runs may override these values in YAML. The defaults
+    intentionally reproduce the pre-v3 implementation. The legacy
+    loss-scoring path remains unchanged.
+    """
+    if paper_accuracy_protocol:
+        lora_r = int(getattr(cfg, "proxy_lora_r", 128))
+        lora_alpha = int(getattr(cfg, "proxy_lora_alpha", 128))
+        lora_dropout = float(getattr(cfg, "proxy_lora_dropout", 0.0))
+        per_device_batch_size = int(
+            getattr(cfg, "proxy_per_device_train_batch_size", 4)
+        )
+        effective_batch_size = int(
+            getattr(cfg, "proxy_effective_batch_size", 32)
+        )
+        epochs = float(getattr(cfg, "proxy_train_epochs", 2))
+        learning_rate = float(getattr(cfg, "proxy_learning_rate", 5e-4))
+    else:
+        lora_r = 128
+        lora_alpha = 128
+        lora_dropout = 0.0
+        per_device_batch_size = 4
+        effective_batch_size = 32
+        epochs = 1.0
+        learning_rate = float(5e-6)
+
+    if lora_r <= 0:
+        raise ValueError("proxy_lora_r must be positive")
+    if lora_alpha <= 0:
+        raise ValueError("proxy_lora_alpha must be positive")
+    if not 0.0 <= lora_dropout < 1.0:
+        raise ValueError("proxy_lora_dropout must be in [0, 1)")
+    if per_device_batch_size <= 0:
+        raise ValueError(
+            "proxy_per_device_train_batch_size must be positive"
+        )
+    if effective_batch_size <= 0:
+        raise ValueError("proxy_effective_batch_size must be positive")
+    if epochs <= 0:
+        raise ValueError("proxy_train_epochs must be positive")
+    if learning_rate <= 0:
+        raise ValueError("proxy_learning_rate must be positive")
+
+    num_gpus = accelerator.num_processes
+    global_micro_batch = num_gpus * per_device_batch_size
+    if effective_batch_size % global_micro_batch != 0:
+        raise ValueError(
+            f"Effective batch size {effective_batch_size} is not divisible "
+            f"by {num_gpus} processes x batch size "
+            f"{per_device_batch_size}."
+        )
+
+    return {
+        "lora_r": lora_r,
+        "lora_alpha": lora_alpha,
+        "lora_dropout": lora_dropout,
+        "per_device_batch_size": per_device_batch_size,
+        "effective_batch_size": effective_batch_size,
+        "gradient_accumulation_steps": (
+            effective_batch_size // global_micro_batch
+        ),
+        "epochs": epochs,
+        "learning_rate": learning_rate,
+        "num_gpus": num_gpus,
+    }
+
+
 def save_instruction_scores(instructions, save_path):
     payload = {
         "candidate_instructions": [
@@ -271,33 +341,38 @@ def warmup_models(cfg, accelerator):
             load_from_cache_file=False
         )
 
+        training_settings = _proxy_training_settings(
+            cfg,
+            accelerator,
+            paper_accuracy_protocol,
+        )
         peft_parameters = LoraConfig(
-            r=128,
-            lora_alpha=128,
-            lora_dropout=0.0,
+            r=training_settings["lora_r"],
+            lora_alpha=training_settings["lora_alpha"],
+            lora_dropout=training_settings["lora_dropout"],
             target_modules=['q_proj','k_proj','v_proj','o_proj','gate_proj','up_proj','down_proj'],
             bias="none",
             task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, peft_parameters)
-        if accelerator.is_main_process: model.print_trainable_parameters()
-
-        num_gpus = accelerator.num_processes
-        per_device_batch_size = 4
-        global_micro_batch = num_gpus * per_device_batch_size
-        if 32 % global_micro_batch != 0:
-            raise ValueError(
-                "Effective batch size 32 is not divisible by "
-                f"{num_gpus} processes x batch size "
-                f"{per_device_batch_size}."
+        if accelerator.is_main_process:
+            model.print_trainable_parameters()
+            log.info(
+                "LoRA hyperparams: "
+                f"rank={training_settings['lora_r']}, "
+                f"alpha={training_settings['lora_alpha']}, "
+                f"dropout={training_settings['lora_dropout']}"
             )
-        gradient_accumulation_steps = 32 // global_micro_batch
-        epochs = 2 if paper_accuracy_protocol else 1
-        learning_rate = (
-            float(5e-4)
-            if paper_accuracy_protocol
-            else float(5e-6)
-        )
+
+        num_gpus = training_settings["num_gpus"]
+        per_device_batch_size = training_settings[
+            "per_device_batch_size"
+        ]
+        gradient_accumulation_steps = training_settings[
+            "gradient_accumulation_steps"
+        ]
+        epochs = training_settings["epochs"]
+        learning_rate = training_settings["learning_rate"]
 
         if accelerator.is_main_process:
             log.info(
@@ -728,29 +803,38 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 load_from_cache_file=False
             )
 
+            training_settings = _proxy_training_settings(
+                cfg,
+                accelerator,
+                True,
+            )
             peft_parameters = LoraConfig(
-                r=128,
-                lora_alpha=128,
-                lora_dropout=0.0,
+                r=training_settings["lora_r"],
+                lora_alpha=training_settings["lora_alpha"],
+                lora_dropout=training_settings["lora_dropout"],
                 target_modules=['q_proj','k_proj','v_proj','o_proj','gate_proj','up_proj','down_proj'],
                 bias="none",
                 task_type="CAUSAL_LM",
             )
             model = get_peft_model(model, peft_parameters)
-            if accelerator.is_main_process: model.print_trainable_parameters()
-
-            num_gpus = accelerator.num_processes
-            per_device_batch_size = 4
-            global_micro_batch = num_gpus * per_device_batch_size
-            if 32 % global_micro_batch != 0:
-                raise ValueError(
-                    "Effective batch size 32 is not divisible by "
-                    f"{num_gpus} processes x batch size "
-                    f"{per_device_batch_size}."
+            if accelerator.is_main_process:
+                model.print_trainable_parameters()
+                log.info(
+                    "LoRA hyperparams: "
+                    f"rank={training_settings['lora_r']}, "
+                    f"alpha={training_settings['lora_alpha']}, "
+                    f"dropout={training_settings['lora_dropout']}"
                 )
-            gradient_accumulation_steps = 32 // global_micro_batch
-            epochs = 2
-            learning_rate = float(5e-4)
+
+            num_gpus = training_settings["num_gpus"]
+            per_device_batch_size = training_settings[
+                "per_device_batch_size"
+            ]
+            gradient_accumulation_steps = training_settings[
+                "gradient_accumulation_steps"
+            ]
+            epochs = training_settings["epochs"]
+            learning_rate = training_settings["learning_rate"]
 
             if accelerator.is_main_process:
                 log.info(

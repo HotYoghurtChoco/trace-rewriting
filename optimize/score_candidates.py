@@ -6,6 +6,7 @@ The score drives the next round of instruction evolution.
 """
 
 import gc
+import json
 import logging
 import multiprocessing
 import os
@@ -30,6 +31,8 @@ log = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 MODEL_COMPLETE_MARKER = ".stage6a_complete"
+MODEL_METADATA_FILE = "stage6a_model_metadata.yaml"
+ADAPTER_SUBDIR = "adapter"
 
 
 class Instruction:
@@ -47,7 +50,37 @@ def _stage6a_protocol(cfg):
     return str(getattr(cfg, "stage6a_protocol", "paper_a2_accuracy_v1"))
 
 
-def _verified_model_exists(model_dir, cfg):
+def _validate_accuracy_protocol_config(cfg):
+    if cfg.score_type != "acc":
+        return
+
+    required = {
+        "stage6a_model_artifact": "adapter_only",
+        "stage6a_evaluation_mode": "vllm_dynamic_lora",
+        "stage6a_training_dtype": "bfloat16",
+        "stage6a_inference_dtype": "bfloat16",
+    }
+    for key, expected in required.items():
+        actual = getattr(cfg, key, None)
+        if actual != expected:
+            raise ValueError(
+                f"{key} must be {expected!r} for the Stage 6A "
+                f"accuracy protocol; found {actual!r}."
+            )
+
+    if bool(cfg.rescore):
+        raise ValueError(
+            "rescore=true is not allowed for the resumable Stage 6A "
+            "accuracy protocol."
+        )
+
+
+def _verified_model_exists(
+    model_dir,
+    cfg,
+    expected_base_model=None,
+    expected_tokenizer=None,
+):
     if not os.path.exists(model_dir):
         return False
 
@@ -67,13 +100,126 @@ def _verified_model_exists(model_dir, cfg):
             f"expected {expected_protocol}, found {actual_protocol}."
         )
 
+    metadata_path = os.path.join(model_dir, MODEL_METADATA_FILE)
+    if not os.path.isfile(metadata_path):
+        raise RuntimeError(
+            f"Model artifact metadata is missing: {metadata_path}"
+        )
+
+    with open(metadata_path, "r") as f:
+        metadata = yaml.safe_load(f)
+
+    expected_metadata = {
+        "protocol": expected_protocol,
+        "artifact_type": "lora_adapter_only",
+        "training_dtype": "bfloat16",
+        "evaluation_mode": "vllm_dynamic_lora",
+    }
+    if expected_base_model is not None:
+        expected_metadata["base_model"] = expected_base_model
+    if expected_tokenizer is not None:
+        expected_metadata["tokenizer"] = expected_tokenizer
+
+    for key, expected_value in expected_metadata.items():
+        actual_value = metadata.get(key)
+        if actual_value != expected_value:
+            raise RuntimeError(
+                f"Model artifact metadata mismatch for {key} at "
+                f"{model_dir}: expected {expected_value!r}, "
+                f"found {actual_value!r}."
+            )
+
+    adapter_dir = os.path.join(model_dir, ADAPTER_SUBDIR)
+    required_files = (
+        os.path.join(adapter_dir, "adapter_config.json"),
+    )
+    for required_file in required_files:
+        if not os.path.isfile(required_file):
+            raise RuntimeError(
+                f"Required adapter file is missing: {required_file}"
+            )
+
+    adapter_weights = (
+        os.path.join(adapter_dir, "adapter_model.safetensors"),
+        os.path.join(adapter_dir, "adapter_model.bin"),
+    )
+    if not any(os.path.isfile(path) for path in adapter_weights):
+        raise RuntimeError(
+            f"No adapter weights were found in {adapter_dir}."
+        )
+
+    dense_weights = [
+        name
+        for name in os.listdir(model_dir)
+        if name.startswith("model")
+        and name.endswith((".safetensors", ".bin"))
+    ]
+    if dense_weights:
+        raise RuntimeError(
+            f"Unexpected dense-model weights in adapter-only artifact "
+            f"{model_dir}: {dense_weights}"
+        )
+
     return True
 
 
-def _mark_model_complete(model_dir, cfg):
+def _mark_model_complete(
+    model_dir,
+    cfg,
+    base_model,
+    tokenizer_name,
+):
+    metadata = {
+        "protocol": _stage6a_protocol(cfg),
+        "artifact_type": "lora_adapter_only",
+        "base_model": base_model,
+        "tokenizer": tokenizer_name,
+        "training_dtype": "bfloat16",
+        "evaluation_mode": "vllm_dynamic_lora",
+    }
+    metadata_path = os.path.join(model_dir, MODEL_METADATA_FILE)
+    with open(metadata_path, "w") as f:
+        yaml.safe_dump(metadata, f, sort_keys=False)
+
     marker_path = os.path.join(model_dir, MODEL_COMPLETE_MARKER)
     with open(marker_path, "w") as f:
         f.write(f"{_stage6a_protocol(cfg)}\n")
+
+
+def _save_adapter_only_artifact(
+    trainer,
+    final_model_dir,
+    cfg,
+    base_model,
+    tokenizer_name,
+):
+    incomplete_dir = f"{final_model_dir}.incomplete"
+    if os.path.exists(final_model_dir):
+        raise RuntimeError(
+            f"Refusing to overwrite existing artifact: {final_model_dir}"
+        )
+    if os.path.exists(incomplete_dir):
+        raise RuntimeError(
+            f"Found incomplete artifact: {incomplete_dir}. "
+            "Inspect and move it aside before retrying."
+        )
+
+    os.makedirs(incomplete_dir, exist_ok=False)
+    adapter_dir = os.path.join(incomplete_dir, ADAPTER_SUBDIR)
+    trainer.save_model(adapter_dir)
+    _mark_model_complete(
+        incomplete_dir,
+        cfg,
+        base_model,
+        tokenizer_name,
+    )
+    _verified_model_exists(
+        incomplete_dir,
+        cfg,
+        expected_base_model=base_model,
+        expected_tokenizer=tokenizer_name,
+    )
+    os.replace(incomplete_dir, final_model_dir)
 
 
 def _load_training_tokenizer(tokenizer_name):
@@ -301,7 +447,12 @@ def warmup_models(cfg, accelerator):
             model_name.split("/")[-1],
         )
         model_exists = (
-            _verified_model_exists(final_model_dir, cfg)
+            _verified_model_exists(
+                final_model_dir,
+                cfg,
+                expected_base_model=model_name,
+                expected_tokenizer=tokenizer_name,
+            )
             if paper_accuracy_protocol
             else os.path.exists(final_model_dir)
         )
@@ -429,23 +580,33 @@ def warmup_models(cfg, accelerator):
         trainer.train()
 
         if accelerator.is_main_process:
-            base_model = AutoModelForCausalLM.from_pretrained(
-                model_name,
-                torch_dtype=torch.bfloat16,
-                return_dict=True,
-                device_map="cpu",
-            )
-            _align_model_special_tokens(base_model, tokenizer)
-            adapter_dir = os.path.join(final_model_dir, "adapter")
-            trainer.save_model(adapter_dir)
-            model_to_merge = PeftModel.from_pretrained(base_model, adapter_dir)
-            merged_model = model_to_merge.merge_and_unload()
-            merged_model.save_pretrained(final_model_dir)
-            tokenizer.save_pretrained(final_model_dir)
             if paper_accuracy_protocol:
-                _mark_model_complete(final_model_dir, cfg)
+                _save_adapter_only_artifact(
+                    trainer,
+                    final_model_dir,
+                    cfg,
+                    base_model=model_name,
+                    tokenizer_name=tokenizer_name,
+                )
+            else:
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    torch_dtype=torch.bfloat16,
+                    return_dict=True,
+                    device_map="cpu",
+                )
+                _align_model_special_tokens(base_model, tokenizer)
+                adapter_dir = os.path.join(final_model_dir, "adapter")
+                trainer.save_model(adapter_dir)
+                model_to_merge = PeftModel.from_pretrained(
+                    base_model,
+                    adapter_dir,
+                )
+                merged_model = model_to_merge.merge_and_unload()
+                merged_model.save_pretrained(final_model_dir)
+                tokenizer.save_pretrained(final_model_dir)
+                del merged_model, model_to_merge, base_model
             log.info(f"Warmup for model {model_name} done. Saved at {final_model_dir}")
-            del merged_model, model_to_merge, base_model
 
         trainer.accelerator.free_memory()
         model, tokenizer, dataset = accelerator.free_memory(
@@ -481,7 +642,9 @@ _DISTRIBUTED_ENV_VARS = (
 
 
 def _evaluate_candidate_af_accuracy_worker(
-    model_dir,
+    artifact_dir,
+    base_model_dir,
+    tokenizer_name,
     validation_data,
     result_writer,
 ):
@@ -497,37 +660,92 @@ def _evaluate_candidate_af_accuracy_worker(
 
         from evaluate import evaluate_dataset_with_vllm
         from vllm import LLM
+        from vllm.lora.request import LoRARequest
 
         validation_dataset = datasets.Dataset.from_dict(
             validation_data
         )
         tokenizer = AutoTokenizer.from_pretrained(
-            model_dir,
+            tokenizer_name,
             trust_remote_code=True,
             use_fast=True,
             padding_side="left",
         )
+        adapter_dir = os.path.join(artifact_dir, ADAPTER_SUBDIR)
+        adapter_config_path = os.path.join(
+            adapter_dir,
+            "adapter_config.json",
+        )
+        with open(adapter_config_path, "r") as f:
+            adapter_config = json.load(f)
+        adapter_rank = int(adapter_config["r"])
+
         model = LLM(
-            model=model_dir,
+            model=base_model_dir,
+            tokenizer=tokenizer_name,
             tensor_parallel_size=1,
             trust_remote_code=True,
             max_model_len=32768,
             gpu_memory_utilization=0.9,
             enforce_eager=True,
+            dtype="bfloat16",
+            enable_lora=True,
+            max_loras=1,
+            max_lora_rank=adapter_rank,
         )
-        _, metrics = evaluate_dataset_with_vllm(
+        lora_request = LoRARequest(
+            "stage6a_adapter",
+            1,
+            adapter_dir,
+        )
+        evaluated_dataset, metrics = evaluate_dataset_with_vllm(
             model=model,
             tokenizer=tokenizer,
             dataset=validation_dataset,
             dataset_name="gsm8k",
             temperature=0.0,
             max_new_tokens=1024,
+            lora_request=lora_request,
         )
+
+        metrics.update({
+            "evaluation_mode": "vllm_dynamic_lora",
+            "base_model": base_model_dir,
+            "adapter": adapter_dir,
+            "tokenizer": tokenizer_name,
+            "inference_dtype": "bfloat16",
+            "adapter_rank": adapter_rank,
+        })
+
+        evaluation_dir = os.path.join(
+            artifact_dir,
+            "search_validation_evaluation",
+        )
+        os.makedirs(evaluation_dir, exist_ok=True)
+        dataset_path = os.path.join(
+            evaluation_dir,
+            "evaluated_examples.jsonl",
+        )
+        dataset_temp_path = f"{dataset_path}.tmp"
+        evaluated_dataset.to_json(
+            dataset_temp_path,
+            orient="records",
+            lines=True,
+        )
+        os.replace(dataset_temp_path, dataset_path)
+
+        metrics_path = os.path.join(evaluation_dir, "metrics.yaml")
+        metrics_temp_path = f"{metrics_path}.tmp"
+        with open(metrics_temp_path, "w") as f:
+            yaml.safe_dump(metrics, f, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(metrics_temp_path, metrics_path)
+
         result_writer.send(
             {
                 "status": "ok",
-                "raw_accuracy": float(metrics["raw_accuracy"]),
-                "af_accuracy": float(metrics["af_accuracy"]),
+                "metrics": metrics,
             }
         )
     except Exception:
@@ -542,7 +760,9 @@ def _evaluate_candidate_af_accuracy_worker(
 
 
 def evaluate_candidate_af_accuracy(
-    model_dir,
+    artifact_dir,
+    base_model_dir,
+    tokenizer_name,
     validation_dataset,
 ):
     context = multiprocessing.get_context("spawn")
@@ -551,7 +771,9 @@ def evaluate_candidate_af_accuracy(
     process = context.Process(
         target=_evaluate_candidate_af_accuracy_worker,
         args=(
-            model_dir,
+            artifact_dir,
+            base_model_dir,
+            tokenizer_name,
             validation_dataset.to_dict(),
             result_writer,
         ),
@@ -596,9 +818,43 @@ def evaluate_candidate_af_accuracy(
             f"{result.get('traceback', 'No traceback was returned.')}"
         )
 
-    return {
-        "raw_accuracy": float(result["raw_accuracy"]),
-        "af_accuracy": float(result["af_accuracy"]),
+    metrics = result.get("metrics")
+    if not isinstance(metrics, dict):
+        raise RuntimeError(
+            "Candidate evaluator returned invalid metrics."
+        )
+    return metrics
+
+
+def _proxy_comparison_metrics(
+    model_name,
+    clean_metrics,
+    candidate_metrics,
+):
+    candidate_score = (
+        clean_metrics["af_accuracy"]
+        - candidate_metrics["af_accuracy"]
+    )
+    return candidate_score, {
+        "model": model_name,
+        "evaluation_mode": "vllm_dynamic_lora",
+        "clean_raw_accuracy": clean_metrics["raw_accuracy"],
+        "clean_af_accuracy": clean_metrics["af_accuracy"],
+        "clean_raw_token_cap_count": clean_metrics[
+            "raw_token_cap_count"
+        ],
+        "candidate_raw_accuracy": candidate_metrics[
+            "raw_accuracy"
+        ],
+        "candidate_af_accuracy": candidate_metrics[
+            "af_accuracy"
+        ],
+        "candidate_raw_token_cap_count": candidate_metrics[
+            "raw_token_cap_count"
+        ],
+        "accuracy_drop": candidate_score,
+        "clean_evaluation": clean_metrics,
+        "candidate_evaluation": candidate_metrics,
     }
 
 
@@ -713,6 +969,7 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
         proxy_metrics = []
         for model_config in cfg.proxy_models:
             model_name = model_config["name"]
+            tokenizer_name = model_config.get("tokenizer", model_name)
             model_short_name = model_name.split("/")[-1]
             clean_model_dir = os.path.join(
                 cfg.working_dir,
@@ -729,6 +986,8 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 if accelerator.is_main_process:
                     clean_metrics = evaluate_candidate_af_accuracy(
                         clean_model_dir,
+                        model_name,
+                        tokenizer_name,
                         validation_dataset,
                     )
                 else:
@@ -738,7 +997,12 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 clean_metrics_by_model[model_name] = clean_payload[0]
             clean_metrics = clean_metrics_by_model[model_name]
 
-            if _verified_model_exists(final_model_dir, cfg):
+            if _verified_model_exists(
+                final_model_dir,
+                cfg,
+                expected_base_model=model_name,
+                expected_tokenizer=tokenizer_name,
+            ):
                 if accelerator.is_main_process:
                     log.info(
                         f"{final_model_dir} already exists; "
@@ -746,21 +1010,19 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                     )
                     candidate_metrics = evaluate_candidate_af_accuracy(
                         final_model_dir,
+                        model_name,
+                        tokenizer_name,
                         validation_dataset,
                     )
-                    candidate_score = (
-                        clean_metrics["af_accuracy"]
-                        - candidate_metrics["af_accuracy"]
+                    candidate_score, comparison_metrics = (
+                        _proxy_comparison_metrics(
+                            model_name,
+                            clean_metrics,
+                            candidate_metrics,
+                        )
                     )
                     scores.append(candidate_score)
-                    proxy_metrics.append({
-                        "model": model_name,
-                        "clean_raw_accuracy": clean_metrics["raw_accuracy"],
-                        "clean_af_accuracy": clean_metrics["af_accuracy"],
-                        "candidate_raw_accuracy": candidate_metrics["raw_accuracy"],
-                        "candidate_af_accuracy": candidate_metrics["af_accuracy"],
-                        "accuracy_drop": candidate_score,
-                    })
+                    proxy_metrics.append(comparison_metrics)
                     log.info(
                         f"  [{model_name}] clean AF: "
                         f"{clean_metrics['af_accuracy']:.4f}, "
@@ -772,7 +1034,6 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
                 accelerator.wait_for_everyone()
                 continue
 
-            tokenizer_name = model_config.get("tokenizer", model_name)
             tokenizer = _load_training_tokenizer(tokenizer_name)
 
             model = AutoModelForCausalLM.from_pretrained(
@@ -884,22 +1145,14 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
             trainer.train()
 
             if accelerator.is_main_process:
-                base_model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    torch_dtype=torch.bfloat16,
-                    return_dict=True,
-                    device_map="cpu",
+                _save_adapter_only_artifact(
+                    trainer,
+                    final_model_dir,
+                    cfg,
+                    base_model=model_name,
+                    tokenizer_name=tokenizer_name,
                 )
-                _align_model_special_tokens(base_model, tokenizer)
-                adapter_dir = os.path.join(final_model_dir, "adapter")
-                trainer.save_model(adapter_dir)
-                model_to_merge = PeftModel.from_pretrained(base_model, adapter_dir)
-                merged_model = model_to_merge.merge_and_unload()
-                merged_model.save_pretrained(final_model_dir)
-                tokenizer.save_pretrained(final_model_dir)
-                _mark_model_complete(final_model_dir, cfg)
                 log.info(f"Finetuned {model_name}. Saved at {final_model_dir}")
-                del merged_model, model_to_merge, base_model
 
             trainer.accelerator.free_memory()
             model, tokenizer = accelerator.free_memory(model, tokenizer)
@@ -910,21 +1163,19 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
             if accelerator.is_main_process:
                 candidate_metrics = evaluate_candidate_af_accuracy(
                     final_model_dir,
+                    model_name,
+                    tokenizer_name,
                     validation_dataset,
                 )
-                candidate_score = (
-                    clean_metrics["af_accuracy"]
-                    - candidate_metrics["af_accuracy"]
+                candidate_score, comparison_metrics = (
+                    _proxy_comparison_metrics(
+                        model_name,
+                        clean_metrics,
+                        candidate_metrics,
+                    )
                 )
                 scores.append(candidate_score)
-                proxy_metrics.append({
-                    "model": model_name,
-                    "clean_raw_accuracy": clean_metrics["raw_accuracy"],
-                    "clean_af_accuracy": clean_metrics["af_accuracy"],
-                    "candidate_raw_accuracy": candidate_metrics["raw_accuracy"],
-                    "candidate_af_accuracy": candidate_metrics["af_accuracy"],
-                    "accuracy_drop": candidate_score,
-                })
+                proxy_metrics.append(comparison_metrics)
                 log.info(
                     f"  [{model_name}] clean AF: "
                     f"{clean_metrics['af_accuracy']:.4f}, "
@@ -968,6 +1219,7 @@ def score_instructions_acc(cfg, instructions, accelerator, validation_dataset):
     return instructions
 
 def run_scoring(cfg):
+    _validate_accuracy_protocol_config(cfg)
     accelerator = Accelerator()
 
     warmup_models(cfg, accelerator)
@@ -1007,6 +1259,16 @@ def run_scoring(cfg):
         # Create an Instruction object and load its data
         instruction = Instruction(item['name'], item['instruction'])
         instruction.traces = datasets.load_from_disk(dataset_path)
+        if cfg.score_type == "acc":
+            expected_train_size = int(
+                cfg.dataset_size_used_for_optimize
+            )
+            if len(instruction.traces) != expected_train_size:
+                raise ValueError(
+                    f"Candidate dataset {dataset_path} contains "
+                    f"{len(instruction.traces)} rows; expected exactly "
+                    f"{expected_train_size}."
+                )
         instruction.proxy_metrics = item.get("proxy_metrics", [])
         if cfg.rescore:
             instruction.score = None

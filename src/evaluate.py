@@ -8,6 +8,7 @@ For every example we compute two accuracies:
 """
 
 import argparse
+from collections import Counter
 import os
 import sys
 
@@ -117,6 +118,7 @@ def evaluate_dataset_with_vllm(
     dataset_name,
     temperature,
     max_new_tokens,
+    lora_request=None,
 ):
     sampling_params = SamplingParams(
         temperature=temperature,
@@ -145,10 +147,34 @@ def evaluate_dataset_with_vllm(
     log_color(proc_dataset[0]["input_ids"], title="Example input")
 
     prompts = list(proc_dataset["input_ids"])
-    raw_outputs = model.generate(prompts, sampling_params)
+    generation_kwargs = {}
+    if lora_request is not None:
+        generation_kwargs["lora_request"] = lora_request
+
+    raw_outputs = model.generate(
+        prompts,
+        sampling_params,
+        **generation_kwargs,
+    )
     raw_traces = [output.outputs[0].text for output in raw_outputs]
+    raw_finish_reasons = [
+        output.outputs[0].finish_reason
+        for output in raw_outputs
+    ]
+    raw_num_tokens = [
+        len(output.outputs[0].token_ids)
+        for output in raw_outputs
+    ]
 
     dataset = dataset.add_column("trace", raw_traces)
+    dataset = dataset.add_column(
+        "raw_finish_reason",
+        raw_finish_reasons,
+    )
+    dataset = dataset.add_column(
+        "raw_num_tokens",
+        raw_num_tokens,
+    )
     dataset = dataset.map(
         is_correct,
         fn_kwargs={"trace_colname": "trace"},
@@ -163,7 +189,11 @@ def evaluate_dataset_with_vllm(
     af_inputs = [trace + force_str for trace in raw_traces]
     log_color(af_inputs[0], title="Example input after answer-forcing")
 
-    af_outputs = model.generate(af_inputs, sampling_params_af)
+    af_outputs = model.generate(
+        af_inputs,
+        sampling_params_af,
+        **generation_kwargs,
+    )
     af_traces = [
         prefix + output.outputs[0].text
         for prefix, output in zip(af_inputs, af_outputs)
@@ -188,6 +218,17 @@ def evaluate_dataset_with_vllm(
     }
     raw_accuracy = float(df["is_raw_correct"].mean())
     af_accuracy = float(df["is_af_correct"].mean())
+    raw_finish_reason_counts = {
+        str(key): int(value)
+        for key, value in Counter(raw_finish_reasons).items()
+    }
+    raw_token_cap_count = int(
+        sum(reason == "length" for reason in raw_finish_reasons)
+    )
+    raw_num_tokens_stats = {
+        key: float(value)
+        for key, value in df["raw_num_tokens"].describe().items()
+    }
     mmlu_subject_acc = (
         mmlu_acc_by_subject(dataset)
         if "mmlu" in dataset_name
@@ -195,8 +236,12 @@ def evaluate_dataset_with_vllm(
     )
 
     metrics = {
+        "num_examples": len(dataset),
         "raw_accuracy": raw_accuracy,
         "af_accuracy": af_accuracy,
+        "raw_finish_reason_counts": raw_finish_reason_counts,
+        "raw_token_cap_count": raw_token_cap_count,
+        "raw_num_tokens_stats": raw_num_tokens_stats,
         "mmlu_subject_accuracies": mmlu_subject_acc,
         "trace_len_stats": trace_len_stats,
     }

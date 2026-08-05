@@ -1,0 +1,28 @@
+`torch_dtype` is deprecated! Use `dtype` instead!
+
+===== MODEL LOAD =====
+model_name: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+tokenizer_name: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+candidate_name: stage6a_formal_pilot_candidate_0
+candidate_adapter: /srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/stage6a_formal_pilot_candidate_0/finetuned_model/qwen3-1.7b-base-ea980cb0a6c2/adapter
+gradient_parameter_state: candidate_final_adapter
+gradient_mode: eval_no_dropout
+optimizer_step_performed: False
+trainable_tensor_count: 392
+trainable_parameter_count: 17432576
+all_trainable_parameters_are_lora: True
+
+===== BACKWARD PASSES =====
+candidate_loss_1: 1.5957452058792114
+candidate_loss_2: 1.5957452058792114
+candidate_loss_difference: 0.0
+candidate_gradient_norm: 0.9371758234725276
+repeat_gradient_cosine: 0.9999559343408136
+reference_loss: 0.9945945143699646
+reference_gradient_norm: 1.3489099714987782
+candidate_reference_gradient_dot: 0.09672240071679639
+candidate_reference_gradient_cosine: 0.07651084984021235
+predicted_reference_loss_change_per_unit_step: -0.09672240071679639
+result_path: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/smoke/stage6b_1b_8918490/stage6b_1b_gradient_smoke_result.json
+
+stage6b_1b_gradient_smoke: PASS

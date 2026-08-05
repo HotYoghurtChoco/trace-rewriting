@@ -1,0 +1,87 @@
+{
+  "adapter_files": [
+    {
+      "relative_path": "README.md",
+      "sha256": "071c3419e78463067c5ad2dccc82634a02e00026ac85b66ad5973128844cfa03",
+      "size_bytes": 5294
+    },
+    {
+      "relative_path": "adapter_config.json",
+      "sha256": "fa981a6e6d4a88c8672e6816aed76f30ca3bced2ade2a147e3f81ad32a92a95d",
+      "size_bytes": 976
+    },
+    {
+      "relative_path": "adapter_model.safetensors",
+      "sha256": "bf31d1b724b94aeaaed8ff90c1142884e89496264ac6225527321a9d46545a2e",
+      "size_bytes": 69782384
+    },
+    {
+      "relative_path": "added_tokens.json",
+      "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680",
+      "size_bytes": 707
+    },
+    {
+      "relative_path": "chat_template.jinja",
+      "sha256": "a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8",
+      "size_bytes": 4168
+    },
+    {
+      "relative_path": "merges.txt",
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "size_bytes": 1671853
+    },
+    {
+      "relative_path": "special_tokens_map.json",
+      "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd",
+      "size_bytes": 613
+    },
+    {
+      "relative_path": "tokenizer.json",
+      "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+      "size_bytes": 11422654
+    },
+    {
+      "relative_path": "tokenizer_config.json",
+      "sha256": "ffe7b045351d007df591529681cad1b162859afaa83abc082da65c7e8eb994da",
+      "size_bytes": 5430
+    },
+    {
+      "relative_path": "training_args.bin",
+      "sha256": "992f41cbe297fe45829d62b0bb51c9a0416cca5980cb22ff711d147f914e91ea",
+      "size_bytes": 6289
+    },
+    {
+      "relative_path": "vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size_bytes": 2776833
+    }
+  ],
+  "adapter_path": "/srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/stage6a_formal_pilot_candidate_0/finetuned_model/qwen3-1.7b-base-ea980cb0a6c2/adapter",
+  "candidate_columns": [
+    "problem",
+    "solution",
+    "original_trace",
+    "rewrite_trace"
+  ],
+  "candidate_count": 100,
+  "candidate_name": "stage6a_formal_pilot_candidate_0",
+  "candidate_ordered_rows_sha256": "84f0347892a2ff8b8e8dada7bb1fadd66bbc39f215ebc71e52a2ef0cb87d0210",
+  "candidate_path": "/srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/stage6a_formal_pilot_candidate_0",
+  "candidate_reference_problem_overlap_count": 0,
+  "candidate_unique_problem_count": 100,
+  "candidate_yaml_sha256": "417537dd013e403dc525233cd94cdf6a2ec1f8fe0172131b9461b5228c2ab920",
+  "config_sha256": "2db585b73458e370c7f56deaa3fe3be0ae7a3f4a3a9d7d82209af6dcab98bfa6",
+  "method_lock_sha256": "c366851cb049882a5b642cc08bff22e0fef087efa2cee934b6f02bbc5185a337",
+  "model_name": "/srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2",
+  "optimizer_step_performed": false,
+  "reference_count": 100,
+  "reference_jsonl_sha256": "517161b29ce6eba59dd7bbd7519670fde22e3d7f7258b00700dfd7939eae166d",
+  "reference_ordered_rows_sha256": "49e29db61362785fa9fca665d0976de23a410b580dcb66e26c7d33f251e96b5f",
+  "reference_path": "/srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/frozen_data/gradient_reference.jsonl",
+  "reference_unique_problem_count": 100,
+  "scores_computed": false,
+  "seed": 888,
+  "stage": "stage6b_1c_preflight",
+  "status": "PASS",
+  "tokenizer_name": "/srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc"
+}

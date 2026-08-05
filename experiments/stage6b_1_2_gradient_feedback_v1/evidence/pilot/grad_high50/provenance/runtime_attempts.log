@@ -1,0 +1,10 @@
+recorded_at=2026-08-05T11:10:30+10:00
+job_id=8920030.kman.restech.unsw.edu.au
+host=k201
+branch=research/gradient-feedback
+commit=6e22ffdaf0e270f4f8c1ab1ca6268d274a99165a
+protocol=paper_a2_accuracy_v3_dynamic_lora_formal_pilot_v1
+run_kind=controlled_stage6b_2_grad_high50_v1
+evaluation_mode=vllm_dynamic_lora
+model_artifact=adapter_only
+reference_v3_root=/srv/scratch/z5463756/honour/results/stage6a-smoke-qwen3-1.7b-v3

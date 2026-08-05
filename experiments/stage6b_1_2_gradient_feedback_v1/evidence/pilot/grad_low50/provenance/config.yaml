@@ -1,0 +1,67 @@
+seed: 888
+original_traces_path: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/pilot/grad_low50/original_traces
+dataset_size_used_for_optimize: 50
+eval_dataset_size_for_optimize: 100
+score_type: acc
+batch_size_for_scoring: 1
+rescore: false
+stage6a_protocol: paper_a2_accuracy_v3_dynamic_lora_formal_pilot_v1
+rewriter_model_name: openai/gpt-oss-120b
+rewrite_temperature: 0.6
+rewrite_max_tokens: 1024
+proxy_weight_decay: 0.1
+proxy_warmup_ratio: 0.1
+proxy_models:
+- name: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+  tokenizer: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+instruction_generation: You are a math teacher. You will be given a math problem and
+  you will solve it step by step. You will output your final solution like \\boxed{{ANSWER}}.
+  Be sure to include relevant units within the brackets and fully evaluate arithmetic
+  expressions.
+rewrite_prompt_template: '{instruction}
+
+
+  Original trace: {original_trace}
+
+
+  Your solution:
+
+
+  '
+optimization_prompt: I have some instructions along with their corresponding scores.
+  The instructions are arranged in ascending order based on their scores, where higher
+  scores indicate better task performance. Each instruction tells a model to rewrite
+  reasoning traces so that student models learning from the rewritten traces do not
+  gain performance benefits - i.e., the rewritten traces become less useful for knowledge
+  distillation.
+generation_prompt_template: 'You are a math teacher. You will be given a math problem
+  and you will solve it step by step. You will output your final solution like \\boxed{{ANSWER}}.
+  Be sure to include relevant units within the brackets and fully evaluate arithmetic
+  expressions.
+
+
+  Problem: {problem}
+
+
+  Your solution:'
+working_dir: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/pilot/grad_low50
+experiment_folder: iter_0
+proxy_lora_r: 16
+proxy_lora_alpha: 16
+proxy_lora_dropout: 0.05
+proxy_per_device_train_batch_size: 4
+proxy_effective_batch_size: 16
+proxy_train_epochs: 2
+proxy_learning_rate: 0.0001
+stage6a_run_kind: controlled_formal_pilot_v1
+stage6a_reference_run: /srv/scratch/z5463756/honour/results/stage6a-smoke-qwen3-1.7b-v3
+stage6a_clean_source_path: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/frozen_inputs/grad_low50
+stage6a_candidate_source_path: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/frozen_inputs/grad_low50
+stage6a_source_selection: first_100_rows
+stage6a_candidate_generation: existing_optimized_rewrite_traces
+stage6a_validation_selection: gsm8k_train_holdout_shuffle_seed_137_first_100
+stage6a_score_formula: clean_af_minus_candidate_af
+stage6a_model_artifact: adapter_only
+stage6a_evaluation_mode: vllm_dynamic_lora
+stage6a_training_dtype: bfloat16
+stage6a_inference_dtype: bfloat16

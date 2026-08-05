@@ -1,0 +1,31 @@
+num_examples: 100
+raw_accuracy: 0.85
+af_accuracy: 0.88
+raw_finish_reason_counts:
+  stop: 100
+raw_token_cap_count: 0
+raw_num_tokens_stats:
+  count: 100.0
+  mean: 258.95
+  std: 93.24480379272313
+  min: 103.0
+  25%: 188.0
+  50%: 255.5
+  75%: 302.75
+  max: 725.0
+mmlu_subject_accuracies: null
+trace_len_stats:
+  count: 100.0
+  mean: 257.95
+  std: 93.24480379272313
+  min: 102.0
+  25%: 187.0
+  50%: 254.5
+  75%: 301.75
+  max: 724.0
+evaluation_mode: vllm_dynamic_lora
+base_model: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+adapter: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/pilot/grad_high50/clean_comparators/qwen3-1.7b-base-ea980cb0a6c2/adapter
+tokenizer: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+inference_dtype: bfloat16
+adapter_rank: 16

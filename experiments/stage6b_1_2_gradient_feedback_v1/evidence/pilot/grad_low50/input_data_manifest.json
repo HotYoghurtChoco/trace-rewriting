@@ -1,0 +1,9 @@
+{
+  "candidate_sha256": "416402caf202acc0facffd38dc9967ecf221eb8cb606ff458588661ce8598c67",
+  "candidate_source": "/srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/frozen_inputs/grad_low50",
+  "clean_sha256": "0f014ba28aa4deb42719023631dfb93b3f2ebd29307d615b6fe7dd2a4e1d6878",
+  "clean_source": "/srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/frozen_inputs/grad_low50",
+  "num_rows": 50,
+  "protocol": "paper_a2_accuracy_v3_dynamic_lora_formal_pilot_v1",
+  "selection": "frozen_gradient_group_50"
+}

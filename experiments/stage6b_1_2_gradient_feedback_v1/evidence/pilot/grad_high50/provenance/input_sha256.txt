@@ -1,0 +1,5 @@
+dbdba69104c8c85419f764f18b13b01f930909acdb5e59ab620c7fa375e537ed  /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/pilot/grad_high50/config/optimize_stage6a_formal_pilot_v1.yaml
+a06995d76d7679fa9b12264b70177114d48e376428b40f5b35d4839f402af83a  /home/z5463756/honour/pbs/trace-rewriting/stage6b_2_grad_high50_v1.pbs
+2035787b8b7d4e64ff166893cebabcf506facef3c449fcc7a7f927c514596c67  /home/z5463756/honour/papers/trace-rewriting/optimize/score_candidates.py
+02c4cb26f90587c6aeddaf7a4dee96c810f16c4e342c4e02595778e918ab0227  /home/z5463756/honour/papers/trace-rewriting/src/evaluate.py
+38f5c866a27a5761c6b51d6c55166ba72069417d72c239fdfaa919ffac5beb6b  /home/z5463756/honour/papers/trace-rewriting/src/utils.py

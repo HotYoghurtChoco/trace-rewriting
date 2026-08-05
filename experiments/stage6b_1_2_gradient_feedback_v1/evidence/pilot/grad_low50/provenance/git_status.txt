@@ -1,0 +1,7 @@
+?? data/gsm8k/optimized/cache-00032befe7939432.arrow
+?? data/gsm8k/optimized/cache-4f86bb2cc763f879.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00000_of_00004.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00001_of_00004.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00002_of_00004.arrow
+?? data/gsm8k/optimized/cache-b89f46bbc8f5de3a_00003_of_00004.arrow
+?? data/gsm8k/semantic/cache-574270cad6342eba.arrow

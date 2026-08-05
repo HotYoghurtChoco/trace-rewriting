@@ -1,0 +1,402 @@
+import hashlib
+import json
+import math
+import random
+import sys
+from pathlib import Path
+
+import datasets
+import torch
+import yaml
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
+from trl.trainer.sft_trainer import (
+    DataCollatorForLanguageModeling,
+)
+
+from optimize.score_candidates import (
+    _load_training_tokenizer,
+    _tokenize_completion_only_batch,
+)
+
+formal_root = Path(sys.argv[1])
+stage6b_root = Path(sys.argv[2])
+out_dir = Path(sys.argv[3])
+
+config_path = formal_root / "provenance" / "config.yaml"
+candidate_yaml_path = (
+    formal_root / "iter_0" / "candidate_instructions.yaml"
+)
+reference_path = (
+    stage6b_root
+    / "frozen_data"
+    / "gradient_reference.jsonl"
+)
+
+with config_path.open(encoding="utf-8") as handle:
+    config = yaml.safe_load(handle)
+
+with candidate_yaml_path.open(encoding="utf-8") as handle:
+    candidate_yaml = yaml.safe_load(handle)
+
+with reference_path.open(encoding="utf-8") as handle:
+    reference_rows = [
+        json.loads(line)
+        for line in handle
+        if line.strip()
+    ]
+
+seed = int(config["seed"])
+model_name = config["proxy_models"][0]["name"]
+tokenizer_name = config["proxy_models"][0]["tokenizer"]
+instruction = config["instruction_generation"]
+
+candidate_name = (
+    candidate_yaml["candidate_instructions"][0]["name"]
+)
+candidate_path = formal_root / candidate_name
+adapter_path = (
+    candidate_path
+    / "finetuned_model"
+    / Path(model_name).name
+    / "adapter"
+)
+
+assert candidate_path.is_dir(), candidate_path
+assert adapter_path.is_dir(), adapter_path
+assert reference_rows, "Frozen reference is empty"
+
+candidate_dataset = datasets.load_from_disk(
+    str(candidate_path)
+)
+
+candidate_row = candidate_dataset[0]
+reference_row = reference_rows[0]
+
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+assert torch.cuda.is_available()
+assert torch.cuda.is_bf16_supported()
+
+device = torch.device("cuda")
+compute_dtype = torch.bfloat16
+
+tokenizer = _load_training_tokenizer(tokenizer_name)
+
+assert tokenizer.pad_token_id is not None
+assert tokenizer.eos_token_id is not None
+
+collator = DataCollatorForLanguageModeling(
+    pad_token_id=tokenizer.pad_token_id,
+    completion_only_loss=True,
+)
+
+print("\n===== MODEL LOAD =====")
+print("model_name:", model_name)
+print("tokenizer_name:", tokenizer_name)
+print("candidate_name:", candidate_name)
+print("candidate_adapter:", adapter_path)
+print("gradient_parameter_state: candidate_final_adapter")
+print("gradient_mode: eval_no_dropout")
+print("optimizer_step_performed: False")
+
+base_model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    torch_dtype=compute_dtype,
+    local_files_only=True,
+    low_cpu_mem_usage=True,
+)
+
+model = PeftModel.from_pretrained(
+    base_model,
+    str(adapter_path),
+    is_trainable=True,
+    local_files_only=True,
+)
+
+model.to(device)
+model.eval()
+model.config.use_cache = False
+
+trainable = [
+    (name, parameter)
+    for name, parameter in model.named_parameters()
+    if parameter.requires_grad
+]
+
+assert trainable
+assert all(
+    "lora_" in name
+    for name, _ in trainable
+)
+
+trainable_parameter_count = sum(
+    parameter.numel()
+    for _, parameter in trainable
+)
+
+print("trainable_tensor_count:", len(trainable))
+print(
+    "trainable_parameter_count:",
+    trainable_parameter_count,
+)
+print("all_trainable_parameters_are_lora: True")
+
+
+def problem_sha256(text):
+    return hashlib.sha256(
+        text.encode("utf-8")
+    ).hexdigest()
+
+
+def build_batch(problem, response):
+    encoded = _tokenize_completion_only_batch(
+        tokenizer=tokenizer,
+        instruction=instruction,
+        problems=[problem],
+        responses=[response],
+        model_name=model_name,
+    )
+
+    full_ids = encoded["input_ids"][0]
+    full_mask = encoded["completion_mask"][0]
+
+    assert len(full_ids) == len(full_mask)
+
+    kept_ids = full_ids[:1024]
+    kept_mask = full_mask[:1024]
+
+    assert sum(kept_mask) > 0
+
+    collated = collator([{
+        "input_ids": kept_ids,
+        "completion_mask": kept_mask,
+    }])
+
+    labels = collated["labels"][0]
+
+    assert int((labels != -100).sum().item()) == sum(
+        kept_mask
+    )
+
+    model_batch = {
+        key: value.to(device)
+        for key, value in collated.items()
+        if key in {
+            "input_ids",
+            "attention_mask",
+            "labels",
+            "position_ids",
+        }
+    }
+
+    metadata = {
+        "total_tokens_before_truncation": len(full_ids),
+        "total_tokens_kept": len(kept_ids),
+        "completion_tokens_before_truncation": sum(
+            full_mask
+        ),
+        "completion_tokens_kept": sum(kept_mask),
+        "completion_tokens_removed": sum(
+            full_mask[1024:]
+        ),
+        "eos_in_kept_completion": any(
+            token_id == tokenizer.eos_token_id
+            and mask_value == 1
+            for token_id, mask_value in zip(
+                kept_ids,
+                kept_mask,
+                strict=True,
+            )
+        ),
+    }
+
+    return model_batch, metadata
+
+
+candidate_batch, candidate_metadata = build_batch(
+    candidate_row["problem"],
+    candidate_row["rewrite_trace"],
+)
+
+reference_batch, reference_metadata = build_batch(
+    reference_row["problem"],
+    reference_row["solution"],
+)
+
+
+def gradient_snapshot(batch):
+    model.zero_grad(set_to_none=True)
+
+    with torch.autocast(
+        device_type="cuda",
+        dtype=compute_dtype,
+    ):
+        output = model(**batch)
+        loss = output.loss
+
+    assert torch.isfinite(loss).item()
+
+    loss.backward()
+    torch.cuda.synchronize()
+
+    gradients = {}
+
+    for name, parameter in trainable:
+        assert parameter.grad is not None, name
+        gradient = parameter.grad.detach().float().clone()
+        assert torch.isfinite(gradient).all().item()
+        gradients[name] = gradient
+
+    squared_norm = sum(
+        gradient.square().sum().item()
+        for gradient in gradients.values()
+    )
+    norm = math.sqrt(squared_norm)
+
+    assert norm > 0
+    assert math.isfinite(norm)
+
+    return float(loss.detach().cpu()), gradients, norm
+
+
+def gradient_dot(left, right):
+    assert left.keys() == right.keys()
+
+    return sum(
+        (
+            left[name]
+            * right[name]
+        ).sum().item()
+        for name in left
+    )
+
+
+print("\n===== BACKWARD PASSES =====")
+
+candidate_loss_1, candidate_grad_1, candidate_norm_1 = (
+    gradient_snapshot(candidate_batch)
+)
+
+candidate_loss_2, candidate_grad_2, candidate_norm_2 = (
+    gradient_snapshot(candidate_batch)
+)
+
+repeat_dot = gradient_dot(
+    candidate_grad_1,
+    candidate_grad_2,
+)
+repeat_cosine = repeat_dot / (
+    candidate_norm_1
+    * candidate_norm_2
+)
+
+candidate_loss_difference = abs(
+    candidate_loss_1
+    - candidate_loss_2
+)
+
+assert repeat_cosine > 0.9999
+assert candidate_loss_difference < 1e-5
+
+del candidate_grad_2
+
+reference_loss, reference_grad, reference_norm = (
+    gradient_snapshot(reference_batch)
+)
+
+candidate_reference_dot = gradient_dot(
+    candidate_grad_1,
+    reference_grad,
+)
+
+candidate_reference_cosine = (
+    candidate_reference_dot
+    / (candidate_norm_1 * reference_norm)
+)
+
+assert math.isfinite(candidate_reference_cosine)
+assert -1.0001 <= candidate_reference_cosine <= 1.0001
+
+predicted_reference_loss_change_per_unit_step = (
+    -candidate_reference_dot
+)
+
+result = {
+    "status": "PASS",
+    "method": "single_checkpoint_lora_gradient_alignment",
+    "checkpoint_state": "stage6a_candidate_final_adapter",
+    "gradient_mode": "eval_no_dropout",
+    "optimizer_step_performed": False,
+    "seed": seed,
+    "candidate_index": 0,
+    "reference_index": 0,
+    "candidate_problem_sha256": problem_sha256(
+        candidate_row["problem"]
+    ),
+    "reference_problem_sha256": problem_sha256(
+        reference_row["problem"]
+    ),
+    "candidate_tokens": candidate_metadata,
+    "reference_tokens": reference_metadata,
+    "trainable_tensor_count": len(trainable),
+    "trainable_parameter_count": trainable_parameter_count,
+    "candidate_loss_1": candidate_loss_1,
+    "candidate_loss_2": candidate_loss_2,
+    "candidate_loss_difference": candidate_loss_difference,
+    "candidate_gradient_norm": candidate_norm_1,
+    "repeat_gradient_cosine": repeat_cosine,
+    "reference_loss": reference_loss,
+    "reference_gradient_norm": reference_norm,
+    "candidate_reference_gradient_dot": (
+        candidate_reference_dot
+    ),
+    "candidate_reference_gradient_cosine": (
+        candidate_reference_cosine
+    ),
+    "predicted_reference_loss_change_per_unit_step": (
+        predicted_reference_loss_change_per_unit_step
+    ),
+}
+
+result_path = (
+    out_dir / "stage6b_1b_gradient_smoke_result.json"
+)
+
+with result_path.open("w", encoding="utf-8") as handle:
+    json.dump(
+        result,
+        handle,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    handle.write("\n")
+
+print("candidate_loss_1:", candidate_loss_1)
+print("candidate_loss_2:", candidate_loss_2)
+print(
+    "candidate_loss_difference:",
+    candidate_loss_difference,
+)
+print("candidate_gradient_norm:", candidate_norm_1)
+print("repeat_gradient_cosine:", repeat_cosine)
+print("reference_loss:", reference_loss)
+print("reference_gradient_norm:", reference_norm)
+print(
+    "candidate_reference_gradient_dot:",
+    candidate_reference_dot,
+)
+print(
+    "candidate_reference_gradient_cosine:",
+    candidate_reference_cosine,
+)
+print(
+    "predicted_reference_loss_change_per_unit_step:",
+    predicted_reference_loss_change_per_unit_step,
+)
+print("result_path:", result_path)
+
+print("\nstage6b_1b_gradient_smoke: PASS")

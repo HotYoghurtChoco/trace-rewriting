@@ -1,0 +1,65 @@
+method_version: stage6b_2_grad_high_low_pilot_v1
+status: LOCKED_BEFORE_PILOT_RESULTS
+hypothesis: Higher candidate-reference gradient cosine predicts greater downstream
+  student learnability.
+inputs:
+  stage6b_1c_output: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/scoring/stage6b_1c_8918577
+  grad_high50_path: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/scoring/stage6b_1c_8918577/grad_high50
+  grad_low50_path: /srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/scoring/stage6b_1c_8918577/grad_low50
+  grad_high50_count: 50
+  grad_low50_count: 50
+  grad_high50_tree_sha256: 54c10c7d2a2a58f2515a16cf9e0684a5d2df40ef41c797e58afa0ab7b8cd149d
+  grad_low50_tree_sha256: beae486d8a8f77b0993b0e869c217c8fadf72218a4b4c2fb131787258715b0f1
+  stage6b_1c_summary_sha256: 8d00ae1e5997005e60426e3ef97133531f2ebbc2fbf77deadd4db588b6dfbee0
+  ranking_metric: gradient_cosine
+  ranking_direction: descending
+controlled_training:
+  only_intended_variable: GradHigh50_or_GradLow50_dataset
+  starting_checkpoint: same_qwen3_1.7b_base_model
+  reuse_stage6a_candidate_adapter: false
+  reuse_optimizer_state: false
+  isolated_training_processes: true
+  seed: 888
+  lora_r: 16
+  lora_alpha: 16
+  lora_dropout: 0.05
+  per_device_train_batch_size: 4
+  effective_batch_size: 16
+  epochs: 2
+  learning_rate: 0.0001
+  weight_decay: 0.1
+  warmup_ratio: 0.1
+  training_dtype: bfloat16
+  response_column: rewrite_trace
+controlled_evaluation:
+  dataset: gsm8k_train_holdout_shuffle_seed_137_first_100
+  num_examples: 100
+  evaluation_mode: vllm_dynamic_lora
+  inference_dtype: bfloat16
+  temperature: 0.0
+  vllm_seed: 0
+  maximum_new_tokens: 1024
+  answer_forced_primary: true
+decision_rule:
+  primary_metric: grad_high50_af_accuracy_minus_grad_low50_af_accuracy
+  expected_direction: greater_than_zero
+  directional_pass: primary_metric > 0
+  meaningful_signal: primary_metric >= 0.05
+  null_or_reverse: primary_metric <= 0
+  secondary_metrics:
+  - raw_accuracy_difference
+  - raw_token_cap_count_difference
+  - paired_example_outcomes
+  single_seed_limitation: No robustness or statistical-generalisation claim is permitted
+    from Stage 6B-2 alone.
+stage6a_context_only:
+  clean_raw_accuracy: 0.82
+  clean_af_accuracy: 0.83
+  candidate_raw_accuracy: 0.59
+  candidate_af_accuracy: 0.62
+  candidate_af_drop_from_clean: 0.21
+source:
+  git_commit: 6e22ffdaf0e270f4f8c1ab1ca6268d274a99165a
+  score_candidates_sha256: 2035787b8b7d4e64ff166893cebabcf506facef3c449fcc7a7f927c514596c67
+  evaluate_sha256: 02c4cb26f90587c6aeddaf7a4dee96c810f16c4e342c4e02595778e918ab0227
+  utils_sha256: 38f5c866a27a5761c6b51d6c55166ba72069417d72c239fdfaa919ffac5beb6b

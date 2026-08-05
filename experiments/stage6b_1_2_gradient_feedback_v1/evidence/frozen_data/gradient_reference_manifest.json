@@ -1,0 +1,50 @@
+{
+  "created_at_utc": "2026-08-02T06:25:00.082779+00:00",
+  "gradient_reference": {
+    "first_holdout_index_before_shuffle": 2107,
+    "first_problem_sha256": "cd25c907e3d1230d10bb8b58f04da374c8e5461645ddbd29bf9403937f111661",
+    "jsonl": "/srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/frozen_data/gradient_reference.jsonl",
+    "jsonl_file_sha256": "517161b29ce6eba59dd7bbd7519670fde22e3d7f7258b00700dfd7939eae166d",
+    "last_holdout_index_before_shuffle": 1215,
+    "last_problem_sha256": "f9dd88c7e4102e97045d145107a5f947100905a6b9662ebb8650f6f6e50c8bd8",
+    "pair_manifest_sha256": "aec617d4cac0ed90c3f352911413e2e307b4fcee4e5843e3a44def3cfffe5398",
+    "rows": 100,
+    "selection_positions": "[100:200]",
+    "unique_pairs": 100,
+    "unique_problems": 100
+  },
+  "purpose": "Frozen independent reference set for Stage 6B gradient-attribution validation.",
+  "repository": {
+    "branch": "research/gradient-feedback",
+    "commit": "6e22ffdaf0e270f4f8c1ab1ca6268d274a99165a",
+    "working_tree_clean": false
+  },
+  "runtime": {
+    "datasets": "4.4.1",
+    "python": "3.11.3"
+  },
+  "schema": "stage6b_gradient_reference_manifest_v1",
+  "separation_checks": {
+    "passed": true,
+    "stage6a_reference_pair_overlap": 0,
+    "stage6a_reference_problem_overlap": 0
+  },
+  "source": {
+    "effective_shuffle_seed": 137,
+    "holdout_rows": 2242,
+    "loader": "src.utils.load_gsm8k('holdout')",
+    "loader_seed42_shuffle_assignment": "not assigned; therefore no-op in current repository code"
+  },
+  "stage6a_config": {
+    "file_sha256": "2db585b73458e370c7f56deaa3fe3be0ae7a3f4a3a9d7d82209af6dcab98bfa6",
+    "path": "/srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/provenance/config.yaml"
+  },
+  "stage6a_evaluation": {
+    "existing_jsonl": "/srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/clean_comparators/qwen3-1.7b-base-ea980cb0a6c2/search_validation_evaluation/evaluated_examples.jsonl",
+    "existing_jsonl_file_sha256": "230b2283dbc9cae87d502bdf3374271ae4b6e587ceaea1064fbc95e41174cf40",
+    "pair_manifest_sha256": "2c5f3ef3bea9ac76ccdf7ef9983aa7d6814722898e6c4357ad5a381936996992",
+    "reconstruction_matches_existing": true,
+    "rows": 100,
+    "selection_positions": "[0:100]"
+  }
+}

@@ -1,0 +1,4 @@
+status: INVALID_NOT_EXECUTED
+job_id: 8916264.kman.restech.unsw.edu.au
+reason: heredoc was attached to tee instead of python
+scientific_result: none

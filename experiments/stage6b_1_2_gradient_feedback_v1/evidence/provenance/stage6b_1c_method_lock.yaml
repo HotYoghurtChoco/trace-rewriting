@@ -1,0 +1,44 @@
+method_version: stage6b_1c_gradient_scoring_v1
+status: LOCKED_BEFORE_FULL_SCORE_DISTRIBUTION
+
+model_state:
+  checkpoint: stage6a_candidate_final_adapter
+  parameter_scope: trainable_lora_parameters_only
+  model_mode: eval
+  dropout: disabled
+  optimizer_step: false
+  compute_dtype: bfloat16
+
+data:
+  expected_candidate_count: 100
+  expected_reference_count: 100
+  candidate_response_column: rewrite_trace
+  reference_response_column: solution
+  require_disjoint_problem_sets: true
+
+tokenization:
+  completion_only_loss: true
+  maximum_total_tokens: 1024
+  truncation: retain_first_1024_tokens
+  loss_reduction: mean_over_retained_completion_tokens
+
+reference_gradient:
+  definition: arithmetic_mean_of_100_per_example_loss_gradients
+  example_weighting: equal_weight_per_reference_example
+  accumulation_dtype: float32
+
+candidate_scoring:
+  primary_score: cosine_candidate_gradient_with_mean_reference_gradient
+  secondary_score: dot_candidate_gradient_with_mean_reference_gradient
+  predicted_reference_loss_change: negative_dot_product
+  nonfinite_score: invalid
+  zero_gradient_norm: invalid
+
+ranking:
+  direction: descending_primary_cosine
+  tie_break: ascending_original_candidate_index
+  grad_high50: ranks_1_to_50
+  grad_low50: ranks_51_to_100
+  downstream_subset_order: ascending_original_candidate_index
+
+seed: 888

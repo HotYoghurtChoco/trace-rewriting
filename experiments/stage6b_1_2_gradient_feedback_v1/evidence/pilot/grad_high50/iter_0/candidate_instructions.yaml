@@ -1,0 +1,5 @@
+candidate_instructions:
+- name: stage6b_2_grad_high50
+  instruction: Stage 6B-2 GradHigh50 candidate backed by the frozen gradient-ranked
+    GSM8K rewrite traces.
+  score: null

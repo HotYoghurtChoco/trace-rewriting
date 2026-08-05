@@ -1,0 +1,40 @@
+{
+  "candidate_gradient_norm": 0.9371758234725276,
+  "candidate_index": 0,
+  "candidate_loss_1": 1.5957452058792114,
+  "candidate_loss_2": 1.5957452058792114,
+  "candidate_loss_difference": 0.0,
+  "candidate_problem_sha256": "73429d562982300e6643d83a84428a22e0656773b67dad037d2de2f8bc0b45b9",
+  "candidate_reference_gradient_cosine": 0.07651084984021235,
+  "candidate_reference_gradient_dot": 0.09672240071679639,
+  "candidate_tokens": {
+    "completion_tokens_before_truncation": 218,
+    "completion_tokens_kept": 218,
+    "completion_tokens_removed": 0,
+    "eos_in_kept_completion": true,
+    "total_tokens_before_truncation": 321,
+    "total_tokens_kept": 321
+  },
+  "checkpoint_state": "stage6a_candidate_final_adapter",
+  "gradient_mode": "eval_no_dropout",
+  "method": "single_checkpoint_lora_gradient_alignment",
+  "optimizer_step_performed": false,
+  "predicted_reference_loss_change_per_unit_step": -0.09672240071679639,
+  "reference_gradient_norm": 1.3489099714987782,
+  "reference_index": 0,
+  "reference_loss": 0.9945945143699646,
+  "reference_problem_sha256": "cd25c907e3d1230d10bb8b58f04da374c8e5461645ddbd29bf9403937f111661",
+  "reference_tokens": {
+    "completion_tokens_before_truncation": 91,
+    "completion_tokens_kept": 91,
+    "completion_tokens_removed": 0,
+    "eos_in_kept_completion": true,
+    "total_tokens_before_truncation": 212,
+    "total_tokens_kept": 212
+  },
+  "repeat_gradient_cosine": 0.9999559343408136,
+  "seed": 888,
+  "status": "PASS",
+  "trainable_parameter_count": 17432576,
+  "trainable_tensor_count": 392
+}

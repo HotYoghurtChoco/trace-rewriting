@@ -1,0 +1,827 @@
+#!/bin/bash
+#PBS -N tr-s6b-1c
+#PBS -l select=1:ncpus=8:ngpus=1:mem=46gb:gpu_model=A100
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6b/tr-s6b-1c.pbs.log
+
+set -euo pipefail
+
+REPO="/home/z5463756/honour/papers/trace-rewriting"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+
+FORMAL_ROOT="$SCRATCH/results/stage6a-formal-pilot-qwen3-1.7b-v1"
+STAGE6B_ROOT="$SCRATCH/results/stage6b-gradient-feedback-qwen3-1.7b-v1"
+LOCK_FILE="$STAGE6B_ROOT/provenance/stage6b_1c_method_lock.yaml"
+PREFLIGHT_JSON="$STAGE6B_ROOT/provenance/stage6b_1c_preflight.json"
+
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$STAGE6B_ROOT/scoring/stage6b_1c_$JOB_ID_LABEL"
+
+mkdir -p "$OUT_DIR"
+
+module purge
+module load python/3.11.3
+
+cd "$REPO"
+
+export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "out_dir: $OUT_DIR"
+
+echo
+echo "===== GPU ====="
+nvidia-smi
+
+"$ENV/bin/python" - \
+    "$FORMAL_ROOT" \
+    "$STAGE6B_ROOT" \
+    "$LOCK_FILE" \
+    "$PREFLIGHT_JSON" \
+    "$OUT_DIR" <<'PY' 2>&1 | tee "$OUT_DIR/run.log"
+import csv
+import hashlib
+import json
+import math
+import random
+import statistics
+import sys
+from pathlib import Path
+
+import datasets
+import torch
+import yaml
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
+from trl.trainer.sft_trainer import (
+    DataCollatorForLanguageModeling,
+)
+
+from optimize.score_candidates import (
+    _load_training_tokenizer,
+    _tokenize_completion_only_batch,
+)
+
+
+formal_root = Path(sys.argv[1])
+stage6b_root = Path(sys.argv[2])
+lock_path = Path(sys.argv[3])
+preflight_path = Path(sys.argv[4])
+out_dir = Path(sys.argv[5])
+
+config_path = formal_root / "provenance" / "config.yaml"
+candidate_yaml_path = (
+    formal_root / "iter_0" / "candidate_instructions.yaml"
+)
+reference_path = (
+    stage6b_root
+    / "frozen_data"
+    / "gradient_reference.jsonl"
+)
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def text_sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def ordered_rows_sha256(rows, response_key):
+    digest = hashlib.sha256()
+
+    for index, row in enumerate(rows):
+        record = {
+            "index": index,
+            "problem": row["problem"],
+            response_key: row[response_key],
+        }
+        encoded = json.dumps(
+            record,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest.update(encoded)
+        digest.update(b"\n")
+
+    return digest.hexdigest()
+
+
+def adapter_file_records(adapter_path):
+    records = []
+
+    for path in sorted(adapter_path.rglob("*")):
+        if path.is_file():
+            records.append({
+                "relative_path": str(path.relative_to(adapter_path)),
+                "size_bytes": path.stat().st_size,
+                "sha256": file_sha256(path),
+            })
+
+    return records
+
+
+def quantile(values, probability):
+    ordered = sorted(values)
+    position = probability * (len(ordered) - 1)
+    lower = math.floor(position)
+    upper = math.ceil(position)
+
+    if lower == upper:
+        return ordered[lower]
+
+    weight = position - lower
+    return (
+        ordered[lower] * (1.0 - weight)
+        + ordered[upper] * weight
+    )
+
+
+for required_path in (
+    formal_root,
+    stage6b_root,
+    lock_path,
+    preflight_path,
+    config_path,
+    candidate_yaml_path,
+    reference_path,
+):
+    assert required_path.exists(), required_path
+
+with lock_path.open(encoding="utf-8") as handle:
+    method_lock = yaml.safe_load(handle)
+
+with preflight_path.open(encoding="utf-8") as handle:
+    preflight = json.load(handle)
+
+with config_path.open(encoding="utf-8") as handle:
+    config = yaml.safe_load(handle)
+
+with candidate_yaml_path.open(encoding="utf-8") as handle:
+    candidate_yaml = yaml.safe_load(handle)
+
+with reference_path.open(encoding="utf-8") as handle:
+    reference_rows = [
+        json.loads(line)
+        for line in handle
+        if line.strip()
+    ]
+
+assert method_lock["status"] == (
+    "LOCKED_BEFORE_FULL_SCORE_DISTRIBUTION"
+)
+assert method_lock["candidate_scoring"]["primary_score"] == (
+    "cosine_candidate_gradient_with_mean_reference_gradient"
+)
+assert method_lock["ranking"]["direction"] == (
+    "descending_primary_cosine"
+)
+assert preflight["status"] == "PASS"
+assert preflight["scores_computed"] is False
+
+seed = int(config["seed"])
+model_name = config["proxy_models"][0]["name"]
+tokenizer_name = config["proxy_models"][0]["tokenizer"]
+instruction = config["instruction_generation"]
+candidate_name = (
+    candidate_yaml["candidate_instructions"][0]["name"]
+)
+
+candidate_path = formal_root / candidate_name
+adapter_path = (
+    candidate_path
+    / "finetuned_model"
+    / Path(model_name).name
+    / "adapter"
+)
+
+assert candidate_path.is_dir(), candidate_path
+assert adapter_path.is_dir(), adapter_path
+assert seed == 888, seed
+
+candidate_dataset = datasets.load_from_disk(
+    str(candidate_path)
+)
+candidate_rows = [
+    candidate_dataset[index]
+    for index in range(len(candidate_dataset))
+]
+
+assert len(candidate_rows) == 100
+assert len(reference_rows) == 100
+
+assert file_sha256(lock_path) == preflight["method_lock_sha256"]
+assert file_sha256(config_path) == preflight["config_sha256"]
+assert file_sha256(candidate_yaml_path) == (
+    preflight["candidate_yaml_sha256"]
+)
+assert file_sha256(reference_path) == (
+    preflight["reference_jsonl_sha256"]
+)
+assert ordered_rows_sha256(
+    candidate_rows,
+    "rewrite_trace",
+) == preflight["candidate_ordered_rows_sha256"]
+assert ordered_rows_sha256(
+    reference_rows,
+    "solution",
+) == preflight["reference_ordered_rows_sha256"]
+assert adapter_file_records(adapter_path) == (
+    preflight["adapter_files"]
+)
+
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+assert torch.cuda.is_available()
+assert torch.cuda.is_bf16_supported()
+
+device = torch.device("cuda")
+compute_dtype = torch.bfloat16
+
+tokenizer = _load_training_tokenizer(tokenizer_name)
+
+assert tokenizer.pad_token_id is not None
+assert tokenizer.eos_token_id is not None
+
+collator = DataCollatorForLanguageModeling(
+    pad_token_id=tokenizer.pad_token_id,
+    completion_only_loss=True,
+)
+
+print("\n===== INPUT LOCK VERIFICATION =====")
+print("method_lock_sha256:", file_sha256(lock_path))
+print("candidate_count:", len(candidate_rows))
+print("reference_count:", len(reference_rows))
+print("input_lock_verification: PASS")
+
+print("\n===== MODEL LOAD =====")
+print("model_name:", model_name)
+print("tokenizer_name:", tokenizer_name)
+print("candidate_name:", candidate_name)
+print("candidate_adapter:", adapter_path)
+print("gradient_parameter_state: candidate_final_adapter")
+print("gradient_mode: eval_no_dropout")
+print("optimizer_step_performed: False")
+
+base_model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    torch_dtype=compute_dtype,
+    local_files_only=True,
+    low_cpu_mem_usage=True,
+)
+
+model = PeftModel.from_pretrained(
+    base_model,
+    str(adapter_path),
+    is_trainable=True,
+    local_files_only=True,
+)
+
+model.to(device)
+model.eval()
+model.config.use_cache = False
+
+trainable = [
+    (name, parameter)
+    for name, parameter in model.named_parameters()
+    if parameter.requires_grad
+]
+
+assert trainable
+assert all("lora_" in name for name, _ in trainable)
+
+trainable_parameter_count = sum(
+    parameter.numel()
+    for _, parameter in trainable
+)
+
+print("trainable_tensor_count:", len(trainable))
+print("trainable_parameter_count:", trainable_parameter_count)
+print("all_trainable_parameters_are_lora: True")
+
+
+def build_batch(problem, response):
+    encoded = _tokenize_completion_only_batch(
+        tokenizer=tokenizer,
+        instruction=instruction,
+        problems=[problem],
+        responses=[response],
+        model_name=model_name,
+    )
+
+    full_ids = encoded["input_ids"][0]
+    full_mask = encoded["completion_mask"][0]
+
+    assert len(full_ids) == len(full_mask)
+
+    kept_ids = full_ids[:1024]
+    kept_mask = full_mask[:1024]
+
+    assert sum(kept_mask) > 0
+
+    collated = collator([{
+        "input_ids": kept_ids,
+        "completion_mask": kept_mask,
+    }])
+
+    labels = collated["labels"][0]
+
+    assert int((labels != -100).sum().item()) == sum(kept_mask)
+
+    model_batch = {
+        key: value.to(device)
+        for key, value in collated.items()
+        if key in {
+            "input_ids",
+            "attention_mask",
+            "labels",
+            "position_ids",
+        }
+    }
+
+    metadata = {
+        "total_tokens_before_truncation": len(full_ids),
+        "total_tokens_kept": len(kept_ids),
+        "completion_tokens_before_truncation": sum(full_mask),
+        "completion_tokens_kept": sum(kept_mask),
+        "completion_tokens_removed": sum(full_mask[1024:]),
+        "eos_in_kept_completion": any(
+            token_id == tokenizer.eos_token_id
+            and mask_value == 1
+            for token_id, mask_value in zip(
+                kept_ids,
+                kept_mask,
+                strict=True,
+            )
+        ),
+    }
+
+    return model_batch, metadata
+
+
+def backward_pass(batch):
+    model.zero_grad(set_to_none=True)
+
+    with torch.autocast(
+        device_type="cuda",
+        dtype=compute_dtype,
+    ):
+        output = model(**batch)
+        loss = output.loss
+
+    assert torch.isfinite(loss).item()
+
+    loss.backward()
+    torch.cuda.synchronize()
+
+    for name, parameter in trainable:
+        assert parameter.grad is not None, name
+
+    return float(loss.detach().cpu())
+
+
+def current_gradient_norm():
+    squared_norm = torch.zeros(
+        (),
+        device=device,
+        dtype=torch.float32,
+    )
+
+    for _, parameter in trainable:
+        gradient = parameter.grad.detach().float()
+        squared_norm.add_(gradient.square().sum())
+
+    norm = math.sqrt(float(squared_norm.item()))
+    assert norm > 0
+    assert math.isfinite(norm)
+    return norm
+
+
+print("\n===== REFERENCE GRADIENT AGGREGATION =====")
+
+reference_sum = {
+    name: torch.zeros_like(
+        parameter,
+        dtype=torch.float32,
+        device=device,
+    )
+    for name, parameter in trainable
+}
+reference_metrics = []
+
+for index, row in enumerate(reference_rows):
+    batch, token_metadata = build_batch(
+        row["problem"],
+        row["solution"],
+    )
+    loss = backward_pass(batch)
+    gradient_norm = current_gradient_norm()
+
+    for name, parameter in trainable:
+        reference_sum[name].add_(
+            parameter.grad.detach().float()
+        )
+
+    reference_metrics.append({
+        "reference_index": index,
+        "problem_sha256": text_sha256(row["problem"]),
+        "loss": loss,
+        "gradient_norm": gradient_norm,
+        "tokens": token_metadata,
+    })
+
+    if (index + 1) % 10 == 0:
+        print(
+            f"reference_progress: {index + 1}/"
+            f"{len(reference_rows)}"
+        )
+
+reference_count = len(reference_rows)
+for value in reference_sum.values():
+    value.div_(reference_count)
+
+reference_squared_norm = torch.zeros(
+    (),
+    device=device,
+    dtype=torch.float32,
+)
+for value in reference_sum.values():
+    reference_squared_norm.add_(value.square().sum())
+
+mean_reference_gradient_norm = math.sqrt(
+    float(reference_squared_norm.item())
+)
+assert mean_reference_gradient_norm > 0
+assert math.isfinite(mean_reference_gradient_norm)
+
+print(
+    "mean_reference_gradient_norm:",
+    mean_reference_gradient_norm,
+)
+
+print("\n===== CANDIDATE SCORING =====")
+
+candidate_scores = []
+
+for index, row in enumerate(candidate_rows):
+    batch, token_metadata = build_batch(
+        row["problem"],
+        row["rewrite_trace"],
+    )
+    loss = backward_pass(batch)
+
+    squared_norm = torch.zeros(
+        (),
+        device=device,
+        dtype=torch.float32,
+    )
+    dot_product = torch.zeros(
+        (),
+        device=device,
+        dtype=torch.float32,
+    )
+
+    for name, parameter in trainable:
+        gradient = parameter.grad.detach().float()
+        squared_norm.add_(gradient.square().sum())
+        dot_product.add_((gradient * reference_sum[name]).sum())
+
+    gradient_norm = math.sqrt(float(squared_norm.item()))
+    gradient_dot = float(dot_product.item())
+
+    assert gradient_norm > 0
+    assert math.isfinite(gradient_norm)
+    assert math.isfinite(gradient_dot)
+
+    gradient_cosine = gradient_dot / (
+        gradient_norm * mean_reference_gradient_norm
+    )
+
+    assert math.isfinite(gradient_cosine)
+    assert -1.0001 <= gradient_cosine <= 1.0001
+
+    candidate_scores.append({
+        "candidate_index": index,
+        "problem_sha256": text_sha256(row["problem"]),
+        "candidate_loss": loss,
+        "candidate_gradient_norm": gradient_norm,
+        "gradient_dot": gradient_dot,
+        "gradient_cosine": gradient_cosine,
+        "predicted_reference_loss_change_per_unit_step": (
+            -gradient_dot
+        ),
+        "tokens": token_metadata,
+    })
+
+    if (index + 1) % 10 == 0:
+        print(
+            f"candidate_progress: {index + 1}/"
+            f"{len(candidate_rows)}"
+        )
+
+ranked = sorted(
+    candidate_scores,
+    key=lambda item: (
+        -item["gradient_cosine"],
+        item["candidate_index"],
+    ),
+)
+
+for rank, item in enumerate(ranked, start=1):
+    item["gradient_rank"] = rank
+    item["gradient_group"] = (
+        "GradHigh50" if rank <= 50 else "GradLow50"
+    )
+
+candidate_scores.sort(key=lambda item: item["candidate_index"])
+
+high_indices = sorted(
+    item["candidate_index"]
+    for item in candidate_scores
+    if item["gradient_group"] == "GradHigh50"
+)
+low_indices = sorted(
+    item["candidate_index"]
+    for item in candidate_scores
+    if item["gradient_group"] == "GradLow50"
+)
+
+assert len(high_indices) == 50
+assert len(low_indices) == 50
+assert set(high_indices).isdisjoint(low_indices)
+assert sorted(high_indices + low_indices) == list(range(100))
+
+score_by_index = {
+    item["candidate_index"]: item
+    for item in candidate_scores
+}
+
+
+def scored_subset(indices):
+    subset = candidate_dataset.select(indices)
+    fields = (
+        "gradient_rank",
+        "gradient_group",
+        "gradient_cosine",
+        "gradient_dot",
+        "predicted_reference_loss_change_per_unit_step",
+        "candidate_loss",
+        "candidate_gradient_norm",
+    )
+
+    for field in fields:
+        subset = subset.add_column(
+            field,
+            [score_by_index[index][field] for index in indices],
+        )
+
+    subset = subset.add_column("original_candidate_index", indices)
+    return subset
+
+
+scored_all = scored_subset(list(range(100)))
+grad_high50 = scored_subset(high_indices)
+grad_low50 = scored_subset(low_indices)
+
+scored_all_path = out_dir / "scored_candidates"
+high_path = out_dir / "grad_high50"
+low_path = out_dir / "grad_low50"
+
+scored_all.save_to_disk(str(scored_all_path))
+grad_high50.save_to_disk(str(high_path))
+grad_low50.save_to_disk(str(low_path))
+
+scores_jsonl_path = (
+    out_dir / "stage6b_1c_candidate_scores.jsonl"
+)
+with scores_jsonl_path.open("w", encoding="utf-8") as handle:
+    for item in candidate_scores:
+        handle.write(json.dumps(
+            item,
+            ensure_ascii=False,
+            sort_keys=True,
+        ))
+        handle.write("\n")
+
+reference_jsonl_path = (
+    out_dir / "stage6b_1c_reference_metrics.jsonl"
+)
+with reference_jsonl_path.open("w", encoding="utf-8") as handle:
+    for item in reference_metrics:
+        handle.write(json.dumps(
+            item,
+            ensure_ascii=False,
+            sort_keys=True,
+        ))
+        handle.write("\n")
+
+scores_csv_path = out_dir / "stage6b_1c_candidate_scores.csv"
+with scores_csv_path.open(
+    "w",
+    encoding="utf-8",
+    newline="",
+) as handle:
+    fieldnames = [
+        "candidate_index",
+        "gradient_rank",
+        "gradient_group",
+        "gradient_cosine",
+        "gradient_dot",
+        "predicted_reference_loss_change_per_unit_step",
+        "candidate_loss",
+        "candidate_gradient_norm",
+        "total_tokens_before_truncation",
+        "completion_tokens_before_truncation",
+        "completion_tokens_kept",
+        "completion_tokens_removed",
+        "eos_in_kept_completion",
+        "problem_sha256",
+    ]
+    writer = csv.DictWriter(handle, fieldnames=fieldnames)
+    writer.writeheader()
+
+    for item in candidate_scores:
+        writer.writerow({
+            "candidate_index": item["candidate_index"],
+            "gradient_rank": item["gradient_rank"],
+            "gradient_group": item["gradient_group"],
+            "gradient_cosine": item["gradient_cosine"],
+            "gradient_dot": item["gradient_dot"],
+            "predicted_reference_loss_change_per_unit_step": (
+                item[
+                    "predicted_reference_loss_change_per_unit_step"
+                ]
+            ),
+            "candidate_loss": item["candidate_loss"],
+            "candidate_gradient_norm": (
+                item["candidate_gradient_norm"]
+            ),
+            "total_tokens_before_truncation": (
+                item["tokens"]["total_tokens_before_truncation"]
+            ),
+            "completion_tokens_before_truncation": (
+                item["tokens"][
+                    "completion_tokens_before_truncation"
+                ]
+            ),
+            "completion_tokens_kept": (
+                item["tokens"]["completion_tokens_kept"]
+            ),
+            "completion_tokens_removed": (
+                item["tokens"]["completion_tokens_removed"]
+            ),
+            "eos_in_kept_completion": (
+                item["tokens"]["eos_in_kept_completion"]
+            ),
+            "problem_sha256": item["problem_sha256"],
+        })
+
+cosines = [item["gradient_cosine"] for item in candidate_scores]
+dots = [item["gradient_dot"] for item in candidate_scores]
+candidate_losses = [item["candidate_loss"] for item in candidate_scores]
+candidate_norms = [
+    item["candidate_gradient_norm"]
+    for item in candidate_scores
+]
+high_cosines = [
+    item["gradient_cosine"]
+    for item in candidate_scores
+    if item["gradient_group"] == "GradHigh50"
+]
+low_cosines = [
+    item["gradient_cosine"]
+    for item in candidate_scores
+    if item["gradient_group"] == "GradLow50"
+]
+
+summary = {
+    "status": "PASS",
+    "stage": "stage6b_1c_full_gradient_scoring",
+    "method_version": method_lock["method_version"],
+    "checkpoint_state": "stage6a_candidate_final_adapter",
+    "gradient_mode": "eval_no_dropout",
+    "optimizer_step_performed": False,
+    "seed": seed,
+    "candidate_count": len(candidate_scores),
+    "reference_count": len(reference_metrics),
+    "trainable_tensor_count": len(trainable),
+    "trainable_parameter_count": trainable_parameter_count,
+    "method_lock_sha256": file_sha256(lock_path),
+    "preflight_sha256": file_sha256(preflight_path),
+    "mean_reference_gradient_norm": mean_reference_gradient_norm,
+    "reference_loss_mean": statistics.fmean(
+        item["loss"] for item in reference_metrics
+    ),
+    "reference_gradient_norm_mean": statistics.fmean(
+        item["gradient_norm"] for item in reference_metrics
+    ),
+    "candidate_loss_mean": statistics.fmean(candidate_losses),
+    "candidate_gradient_norm_mean": statistics.fmean(
+        candidate_norms
+    ),
+    "gradient_cosine": {
+        "min": min(cosines),
+        "q25": quantile(cosines, 0.25),
+        "median": statistics.median(cosines),
+        "q75": quantile(cosines, 0.75),
+        "max": max(cosines),
+        "mean": statistics.fmean(cosines),
+    },
+    "gradient_dot": {
+        "min": min(dots),
+        "median": statistics.median(dots),
+        "max": max(dots),
+        "mean": statistics.fmean(dots),
+    },
+    "positive_cosine_count": sum(value > 0 for value in cosines),
+    "zero_cosine_count": sum(value == 0 for value in cosines),
+    "negative_cosine_count": sum(value < 0 for value in cosines),
+    "candidate_truncated_count": sum(
+        item["tokens"]["completion_tokens_removed"] > 0
+        for item in candidate_scores
+    ),
+    "reference_truncated_count": sum(
+        item["tokens"]["completion_tokens_removed"] > 0
+        for item in reference_metrics
+    ),
+    "grad_high50_count": len(high_indices),
+    "grad_low50_count": len(low_indices),
+    "grad_high50_cosine_mean": statistics.fmean(high_cosines),
+    "grad_low50_cosine_mean": statistics.fmean(low_cosines),
+    "grad_high50_original_indices": high_indices,
+    "grad_low50_original_indices": low_indices,
+    "ranking_candidate_indices": [
+        item["candidate_index"] for item in ranked
+    ],
+    "output_order": "ascending_original_candidate_index",
+}
+
+summary_path = out_dir / "stage6b_1c_summary.json"
+with summary_path.open("w", encoding="utf-8") as handle:
+    json.dump(
+        summary,
+        handle,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    handle.write("\n")
+
+reloaded_all = datasets.load_from_disk(str(scored_all_path))
+reloaded_high = datasets.load_from_disk(str(high_path))
+reloaded_low = datasets.load_from_disk(str(low_path))
+
+assert len(reloaded_all) == 100
+assert len(reloaded_high) == 50
+assert len(reloaded_low) == 50
+assert list(reloaded_high["original_candidate_index"]) == high_indices
+assert list(reloaded_low["original_candidate_index"]) == low_indices
+assert set(reloaded_high["original_candidate_index"]).isdisjoint(
+    reloaded_low["original_candidate_index"]
+)
+
+print("\n===== SCORE SUMMARY =====")
+print(json.dumps(
+    summary,
+    ensure_ascii=False,
+    indent=2,
+    sort_keys=True,
+))
+print("\nscored_dataset_reload_check: PASS")
+print("stage6b_1c_full_gradient_scoring: PASS")
+print("summary_path:", summary_path)
+print("scores_jsonl_path:", scores_jsonl_path)
+print("grad_high50_path:", high_path)
+print("grad_low50_path:", low_path)
+PY
+
+echo
+echo "===== SHA256 ====="
+(
+    cd "$OUT_DIR"
+    find . -type f ! -name SHA256SUMS -print0 \
+        | sort -z \
+        | xargs -0 sha256sum \
+        > SHA256SUMS
+    cat SHA256SUMS
+)
+
+echo
+echo "===== COMPLETE ====="
+echo "stage6b_1c_out_dir: $OUT_DIR"

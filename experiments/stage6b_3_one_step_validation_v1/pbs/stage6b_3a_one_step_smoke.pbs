@@ -1,0 +1,91 @@
+#!/bin/bash
+#PBS -N tr-s6b-3a
+#PBS -l select=1:ncpus=8:ngpus=1:mem=46gb:gpu_model=A100
+#PBS -l walltime=01:30:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6b/tr-s6b-3a.pbs.log
+
+set -euo pipefail
+
+REPO="/home/z5463756/honour/papers/trace-rewriting"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+STAGE6B_ROOT="$SCRATCH/results/stage6b-gradient-feedback-qwen3-1.7b-v1"
+EXP_REL="experiments/stage6b_3_one_step_validation_v1"
+VALIDATOR_REL="$EXP_REL/validate_one_step.py"
+LAUNCHER_REL="$EXP_REL/pbs/stage6b_3a_one_step_smoke.pbs"
+EXPECTED_EXECUTION_COMMIT="${EXPECTED_EXECUTION_COMMIT:?Pass the locked execution commit with qsub -v}"
+
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$STAGE6B_ROOT/one_step_validation/smoke/stage6b_3a_$JOB_ID_LABEL"
+
+module purge
+module load python/3.11.3
+cd "$REPO"
+
+if [ "$(git branch --show-current)" != "research/gradient-feedback" ]; then
+    echo "FAIL: unexpected branch"
+    exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$EXPECTED_EXECUTION_COMMIT" ]; then
+    echo "FAIL: execution commit mismatch"
+    exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAIL: tracked or staged changes exist"
+    git status --short
+    exit 1
+fi
+git cat-file -e "HEAD:$VALIDATOR_REL"
+git cat-file -e "HEAD:$LAUNCHER_REL"
+
+if [ -e "$OUT_DIR" ]; then
+    echo "FAIL: output directory already exists: $OUT_DIR"
+    exit 1
+fi
+mkdir -p "$OUT_DIR/provenance"
+
+export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+
+git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show "HEAD:$VALIDATOR_REL" > "$OUT_DIR/provenance/validate_one_step.py"
+git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
+"$ENV/bin/python" -m pip freeze > "$OUT_DIR/provenance/pip_freeze.txt"
+nvidia-smi > "$OUT_DIR/provenance/nvidia_smi.txt"
+module list > "$OUT_DIR/provenance/module_list.txt" 2>&1
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
+echo "out_dir: $OUT_DIR"
+echo
+nvidia-smi
+
+"$ENV/bin/python" "$OUT_DIR/provenance/validate_one_step.py" \
+    --mode smoke \
+    --repo-root "$REPO" \
+    --output-dir "$OUT_DIR" \
+    --expected-execution-commit "$EXPECTED_EXECUTION_COMMIT" \
+    2>&1 | tee "$OUT_DIR/run.log"
+
+printf 'status=PASS\nmode=smoke\njob_id=%s\ncommit=%s\n' \
+    "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" > "$OUT_DIR/COMPLETE"
+
+(
+    cd "$OUT_DIR"
+    find . -type f ! -name SHA256SUMS -print0 \
+        | sort -z \
+        | xargs -0 sha256sum \
+        > SHA256SUMS
+    sha256sum -c SHA256SUMS
+)
+
+echo
+echo "PASS: Stage 6B-3a one-step smoke completed"
+echo "out_dir: $OUT_DIR"

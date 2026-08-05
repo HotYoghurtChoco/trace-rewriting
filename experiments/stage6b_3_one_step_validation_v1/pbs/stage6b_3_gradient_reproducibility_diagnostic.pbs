@@ -1,0 +1,129 @@
+#!/bin/bash
+#PBS -N tr-s6b-3diag
+#PBS -l select=1:ncpus=8:ngpus=1:mem=46gb:gpu_model=A100
+#PBS -l walltime=00:30:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6b/tr-s6b-3diag.pbs.log
+
+set -euo pipefail
+
+REPO="/home/z5463756/honour/papers/trace-rewriting"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+STAGE6B_ROOT="$SCRATCH/results/stage6b-gradient-feedback-qwen3-1.7b-v1"
+EXP_REL="experiments/stage6b_3_one_step_validation_v1"
+DIAGNOSTIC_REL="$EXP_REL/diagnose_gradient_reproducibility.py"
+LOCKED_VALIDATOR_REL="$EXP_REL/validate_one_step.py"
+LAUNCHER_REL="$EXP_REL/pbs/stage6b_3_gradient_reproducibility_diagnostic.pbs"
+FAILED_SMOKE_DIR="$STAGE6B_ROOT/one_step_validation/smoke/stage6b_3a_8924042"
+EXPECTED_DIAGNOSTIC_COMMIT="${EXPECTED_DIAGNOSTIC_COMMIT:?Pass the locked diagnostic commit with qsub -v}"
+
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$STAGE6B_ROOT/one_step_validation/diagnostics/stage6b_3diag_$JOB_ID_LABEL"
+
+module purge
+module load python/3.11.3
+cd "$REPO"
+
+if [ "$(git branch --show-current)" != "research/gradient-feedback" ]; then
+    echo "FAIL: unexpected branch"
+    exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$EXPECTED_DIAGNOSTIC_COMMIT" ]; then
+    echo "FAIL: diagnostic commit mismatch"
+    exit 1
+fi
+if ! git merge-base --is-ancestor \
+    a5f7ac3f17fc59854d57daa65e0ad669ae53b9b7 \
+    "$EXPECTED_DIAGNOSTIC_COMMIT"
+then
+    echo "FAIL: locked one-step execution commit is not an ancestor"
+    exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAIL: tracked or staged changes exist"
+    git status --short
+    exit 1
+fi
+git cat-file -e "HEAD:$DIAGNOSTIC_REL"
+git cat-file -e "HEAD:$LOCKED_VALIDATOR_REL"
+git cat-file -e "HEAD:$LAUNCHER_REL"
+
+if [ ! -f "$FAILED_SMOKE_DIR/run.log" ]; then
+    echo "FAIL: failed smoke evidence is missing"
+    exit 1
+fi
+if ! grep -F \
+    "gradient-dot mismatch 0.0003836005926132202 exceeds 5.786625295877457e-06" \
+    "$FAILED_SMOKE_DIR/run.log" >/dev/null
+then
+    echo "FAIL: expected failed-smoke signature was not found"
+    exit 1
+fi
+if [ -e "$OUT_DIR" ]; then
+    echo "FAIL: output directory already exists: $OUT_DIR"
+    exit 1
+fi
+mkdir -p "$OUT_DIR/provenance"
+
+export PYTHONPATH="$REPO/src:$REPO${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+
+git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show "HEAD:$DIAGNOSTIC_REL" \
+    > "$OUT_DIR/provenance/diagnose_gradient_reproducibility.py"
+git show "HEAD:$LOCKED_VALIDATOR_REL" \
+    > "$OUT_DIR/provenance/validate_one_step.locked.py"
+git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
+cp "$FAILED_SMOKE_DIR/run.log" "$OUT_DIR/provenance/failed_smoke_8924042.run.log"
+qstat -xf 8924042.kman.restech.unsw.edu.au \
+    > "$OUT_DIR/provenance/failed_smoke_8924042.qstat.txt" 2>&1 || true
+"$ENV/bin/python" -m pip freeze > "$OUT_DIR/provenance/pip_freeze.txt"
+nvidia-smi > "$OUT_DIR/provenance/nvidia_smi.txt"
+module list > "$OUT_DIR/provenance/module_list.txt" 2>&1
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "diagnostic_commit: $EXPECTED_DIAGNOSTIC_COMMIT"
+echo "locked_execution_commit: a5f7ac3f17fc59854d57daa65e0ad669ae53b9b7"
+echo "failed_smoke_job: 8924042.kman.restech.unsw.edu.au"
+echo "out_dir: $OUT_DIR"
+echo "scientific_endpoint_evaluated: False"
+echo "positive_eta_update_performed: False"
+echo
+nvidia-smi
+
+"$ENV/bin/python" \
+    "$OUT_DIR/provenance/diagnose_gradient_reproducibility.py" \
+    --repo-root "$REPO" \
+    --output-dir "$OUT_DIR" \
+    --expected-diagnostic-commit "$EXPECTED_DIAGNOSTIC_COMMIT" \
+    2>&1 | tee "$OUT_DIR/run.log"
+
+printf '%s\n' \
+    'status=DIAGNOSTIC_COMPLETE_NOT_FORMAL' \
+    'scientific_endpoint_evaluated=False' \
+    'positive_eta_update_performed=False' \
+    "job_id=$PBS_JOBID" \
+    "diagnostic_commit=$EXPECTED_DIAGNOSTIC_COMMIT" \
+    'locked_execution_commit=a5f7ac3f17fc59854d57daa65e0ad669ae53b9b7' \
+    > "$OUT_DIR/COMPLETE_DIAGNOSTIC_NOT_FORMAL"
+
+(
+    cd "$OUT_DIR"
+    find . -type f ! -name SHA256SUMS -print0 \
+        | sort -z \
+        | xargs -0 sha256sum \
+        > SHA256SUMS
+    sha256sum -c SHA256SUMS
+)
+
+echo
+echo "PASS: numerical reproducibility diagnostic completed"
+echo "This is not a Stage 6B-3 scientific result"
+echo "out_dir: $OUT_DIR"

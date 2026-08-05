@@ -1,0 +1,81 @@
+candidate_instructions:
+- name: stage6a_formal_pilot_candidate_0
+  instruction: Stage 6A formal-pilot candidate backed by the existing optimized GSM8K
+    rewrite traces.
+  score: 0.20999999999999996
+  proxy_metrics:
+  - model: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+    evaluation_mode: vllm_dynamic_lora
+    clean_raw_accuracy: 0.82
+    clean_af_accuracy: 0.83
+    clean_raw_token_cap_count: 1
+    candidate_raw_accuracy: 0.59
+    candidate_af_accuracy: 0.62
+    candidate_raw_token_cap_count: 13
+    accuracy_drop: 0.20999999999999996
+    clean_evaluation:
+      num_examples: 100
+      raw_accuracy: 0.82
+      af_accuracy: 0.83
+      raw_finish_reason_counts:
+        stop: 99
+        length: 1
+      raw_token_cap_count: 1
+      raw_num_tokens_stats:
+        count: 100.0
+        mean: 280.26
+        std: 121.52437673740253
+        min: 128.0
+        25%: 208.75
+        50%: 270.0
+        75%: 312.25
+        max: 1024.0
+      mmlu_subject_accuracies: null
+      trace_len_stats:
+        count: 100.0
+        mean: 279.27
+        std: 121.58622122559444
+        min: 127.0
+        25%: 207.75
+        50%: 269.0
+        75%: 311.25
+        max: 1024.0
+      evaluation_mode: vllm_dynamic_lora
+      base_model: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+      adapter: /srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/clean_comparators/qwen3-1.7b-base-ea980cb0a6c2/adapter
+      tokenizer: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+      inference_dtype: bfloat16
+      adapter_rank: 16
+    candidate_evaluation:
+      num_examples: 100
+      raw_accuracy: 0.59
+      af_accuracy: 0.62
+      raw_finish_reason_counts:
+        stop: 87
+        length: 13
+      raw_token_cap_count: 13
+      raw_num_tokens_stats:
+        count: 100.0
+        mean: 339.88
+        std: 288.853193288091
+        min: 15.0
+        25%: 180.25
+        50%: 252.0
+        75%: 337.25
+        max: 1024.0
+      mmlu_subject_accuracies: null
+      trace_len_stats:
+        count: 100.0
+        mean: 339.0
+        std: 289.1755609495814
+        min: 14.0
+        25%: 179.25
+        50%: 251.0
+        75%: 336.25
+        max: 1024.0
+      evaluation_mode: vllm_dynamic_lora
+      base_model: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+      adapter: /srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/stage6a_formal_pilot_candidate_0/finetuned_model/qwen3-1.7b-base-ea980cb0a6c2/adapter
+      tokenizer: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+      inference_dtype: bfloat16
+      adapter_rank: 16

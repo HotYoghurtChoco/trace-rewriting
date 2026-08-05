@@ -1,0 +1,620 @@
+#!/bin/bash
+#PBS -N tr-s6a-formal-p1
+#PBS -l select=1:ncpus=8:ngpus=1:mem=46gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6a/tr-s6a-formal-p1.pbs.log
+
+set -euo pipefail
+
+REPO="/home/z5463756/honour/papers/trace-rewriting"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+PBS_DIR="/home/z5463756/honour/pbs/trace-rewriting"
+
+FORMAL_ROOT="$SCRATCH/results/stage6a-formal-pilot-qwen3-1.7b-v1"
+CONFIG="$FORMAL_ROOT/config/optimize_stage6a_formal_pilot_v1.yaml"
+PBS_SCRIPT="$PBS_DIR/stage6a_qwen3_1p7b_formal_pilot_v1.pbs"
+
+EXPECTED_BRANCH="research/gradient-feedback"
+REQUIRED_ANCESTOR="6222bb719cf458b172d96b9b1455d587069b2f06"
+PROTOCOL="paper_a2_accuracy_v3_dynamic_lora_formal_pilot_v1"
+MODEL_DIRNAME="qwen3-1.7b-base-ea980cb0a6c2"
+CANDIDATE_NAME="stage6a_formal_pilot_candidate_0"
+
+EXPECTED_SCORE_SHA="2035787b8b7d4e64ff166893cebabcf506facef3c449fcc7a7f927c514596c67"
+EXPECTED_EVALUATE_SHA="02c4cb26f90587c6aeddaf7a4dee96c810f16c4e342c4e02595778e918ab0227"
+EXPECTED_UTILS_SHA="38f5c866a27a5761c6b51d6c55166ba72069417d72c239fdfaa919ffac5beb6b"
+
+LOG_DIR="$SCRATCH/logs/stage6a"
+JOB_LABEL="${PBS_JOBNAME:-tr-s6a-formal-p1}"
+JOB_ID_LABEL="${PBS_JOBID:-manual}"
+LOG_FILE="$LOG_DIR/${JOB_LABEL}.${JOB_ID_LABEL}.log"
+JOB_TMP="/tmp/s6a-formal-p1-${USER}-${JOB_ID_LABEL%%.*}"
+
+mkdir -p "$LOG_DIR" "$JOB_TMP"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+on_exit() {
+    STATUS=$?
+    printf '\nJob exit status: %s\n' "$STATUS"
+    printf 'Finished: %s\n' "$(date --iso-8601=seconds)"
+}
+trap on_exit EXIT
+
+printf 'Started: %s\n' "$(date --iso-8601=seconds)"
+printf 'Job ID: %s\n' "$JOB_ID_LABEL"
+printf 'Host: %s\n' "$(hostname)"
+printf 'Log: %s\n' "$LOG_FILE"
+
+module purge
+module load gcc/12.2.0
+module load python/3.11.3
+module load cuda/12.8.0
+
+export PATH="$ENV/bin:$PATH"
+
+cd "$REPO"
+
+CURRENT_BRANCH="$(git branch --show-current)"
+CURRENT_COMMIT="$(git rev-parse HEAD)"
+
+printf 'Repository branch: %s\n' "$CURRENT_BRANCH"
+printf 'Repository commit: %s\n' "$CURRENT_COMMIT"
+printf 'Required ancestor: %s\n' "$REQUIRED_ANCESTOR"
+printf 'Configuration: %s\n' "$CONFIG"
+
+if [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
+    printf 'ERROR: expected branch %s, found %s\n' \
+        "$EXPECTED_BRANCH" \
+        "$CURRENT_BRANCH"
+    exit 1
+fi
+
+if ! git merge-base --is-ancestor "$REQUIRED_ANCESTOR" HEAD; then
+    printf 'ERROR: required Stage 6A v3 commit is not an ancestor of HEAD.\n'
+    exit 1
+fi
+
+if [ -n "$(git status --short --untracked-files=no)" ]; then
+    printf 'ERROR: tracked repository changes detected.\n'
+    git status --short
+    exit 1
+fi
+
+check_sha() {
+    local expected="$1"
+    local path="$2"
+    local actual
+    actual="$(sha256sum "$path" | awk '{print $1}')"
+    if [ "$actual" != "$expected" ]; then
+        printf 'ERROR: SHA256 mismatch for %s\n' "$path"
+        printf 'Expected: %s\n' "$expected"
+        printf 'Actual:   %s\n' "$actual"
+        exit 1
+    fi
+}
+
+check_sha "$EXPECTED_SCORE_SHA" "$REPO/optimize/score_candidates.py"
+check_sha "$EXPECTED_EVALUATE_SHA" "$REPO/src/evaluate.py"
+check_sha "$EXPECTED_UTILS_SHA" "$REPO/src/utils.py"
+printf 'Stage 6A source SHA256 preflight: PASS\n'
+
+export HF_HOME="$SCRATCH/cache/huggingface"
+export XDG_CACHE_HOME="$SCRATCH/cache"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONNOUSERSITE=1
+export PYTHONPATH="$REPO/src:$REPO/optimize"
+export TOKENIZERS_PARALLELISM=false
+export WANDB_DISABLED=true
+export OMP_NUM_THREADS=8
+export TRACE_NUM_PROC=4
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export TMPDIR="$JOB_TMP"
+export TRITON_CACHE_DIR="$JOB_TMP/triton"
+
+mkdir -p "$TRITON_CACHE_DIR"
+
+FORMAL_ROOT="$FORMAL_ROOT" \
+CONFIG="$CONFIG" \
+REPO="$REPO" \
+SCRATCH="$SCRATCH" \
+PROTOCOL="$PROTOCOL" \
+CANDIDATE_NAME="$CANDIDATE_NAME" \
+"$ENV/bin/python" - <<'STAGE6A_FORMAL_INPUTS_PY'
+import hashlib
+import json
+import os
+
+import datasets
+import yaml
+
+root = os.environ["FORMAL_ROOT"]
+config_path = os.environ["CONFIG"]
+repo = os.environ["REPO"]
+scratch = os.environ["SCRATCH"]
+protocol = os.environ["PROTOCOL"]
+candidate_name = os.environ["CANDIDATE_NAME"]
+
+train_size = 100
+eval_size = 100
+base_model = f"{scratch}/models/qwen3-1.7b-base-ea980cb0a6c2"
+tokenizer = f"{scratch}/models/qwen3-1.7b-tokenizer-70d244cc86cc"
+clean_source = f"{repo}/data/gsm8k/semantic"
+candidate_source = f"{repo}/data/gsm8k/optimized"
+
+config = {
+    "seed": 888,
+    "original_traces_path": f"{root}/original_traces",
+    "dataset_size_used_for_optimize": train_size,
+    "eval_dataset_size_for_optimize": eval_size,
+    "score_type": "acc",
+    "batch_size_for_scoring": 1,
+    "rescore": False,
+    "stage6a_protocol": protocol,
+    "rewriter_model_name": "openai/gpt-oss-120b",
+    "rewrite_temperature": 0.6,
+    "rewrite_max_tokens": 1024,
+    "proxy_weight_decay": 0.1,
+    "proxy_warmup_ratio": 0.1,
+    "proxy_models": [
+        {
+            "name": base_model,
+            "tokenizer": tokenizer,
+        }
+    ],
+    "instruction_generation": (
+        "You are a math teacher. You will be given a math problem and "
+        "you will solve it step by step. You will output your final "
+        "solution like \\\\boxed{{ANSWER}}. Be sure to include relevant "
+        "units within the brackets and fully evaluate arithmetic "
+        "expressions."
+    ),
+    "rewrite_prompt_template": (
+        "{instruction}\n\nOriginal trace: {original_trace}"
+        "\n\nYour solution:\n\n"
+    ),
+    "optimization_prompt": (
+        "I have some instructions along with their corresponding scores. "
+        "The instructions are arranged in ascending order based on their "
+        "scores, where higher scores indicate better task performance. "
+        "Each instruction tells a model to rewrite reasoning traces so "
+        "that student models learning from the rewritten traces do not "
+        "gain performance benefits - i.e., the rewritten traces become "
+        "less useful for knowledge distillation."
+    ),
+    "generation_prompt_template": (
+        "You are a math teacher. You will be given a math problem and "
+        "you will solve it step by step. You will output your final "
+        "solution like \\\\boxed{{ANSWER}}. Be sure to include relevant "
+        "units within the brackets and fully evaluate arithmetic "
+        "expressions.\n\nProblem: {problem}\n\nYour solution:"
+    ),
+    "working_dir": root,
+    "experiment_folder": "iter_0",
+    "proxy_lora_r": 16,
+    "proxy_lora_alpha": 16,
+    "proxy_lora_dropout": 0.05,
+    "proxy_per_device_train_batch_size": 4,
+    "proxy_effective_batch_size": 16,
+    "proxy_train_epochs": 2,
+    "proxy_learning_rate": 0.0001,
+    "stage6a_run_kind": "controlled_formal_pilot_v1",
+    "stage6a_reference_run": (
+        f"{scratch}/results/stage6a-smoke-qwen3-1.7b-v3"
+    ),
+    "stage6a_clean_source_path": clean_source,
+    "stage6a_candidate_source_path": candidate_source,
+    "stage6a_source_selection": "first_100_rows",
+    "stage6a_candidate_generation": (
+        "existing_optimized_rewrite_traces"
+    ),
+    "stage6a_validation_selection": (
+        "gsm8k_train_holdout_shuffle_seed_137_first_100"
+    ),
+    "stage6a_score_formula": "clean_af_minus_candidate_af",
+    "stage6a_model_artifact": "adapter_only",
+    "stage6a_evaluation_mode": "vllm_dynamic_lora",
+    "stage6a_training_dtype": "bfloat16",
+    "stage6a_inference_dtype": "bfloat16",
+}
+
+candidate_payload = {
+    "candidate_instructions": [
+        {
+            "name": candidate_name,
+            "instruction": (
+                "Stage 6A formal-pilot candidate backed by the existing "
+                "optimized GSM8K rewrite traces."
+            ),
+            "score": None,
+        }
+    ]
+}
+
+def atomic_yaml(path, payload):
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as handle:
+            actual = yaml.safe_load(handle)
+        if actual != payload:
+            raise RuntimeError(
+                f"Existing YAML differs from the formal protocol: {path}"
+            )
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = f"{path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            payload,
+            handle,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+
+def dataset_digest(dataset, columns):
+    digest = hashlib.sha256()
+    for row in dataset:
+        payload = {column: row[column] for column in columns}
+        digest.update(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+def prepare_dataset(path, expected, columns):
+    expected_digest = dataset_digest(expected, columns)
+    if os.path.exists(path):
+        actual = datasets.load_from_disk(path)
+        if list(actual.column_names) != list(columns):
+            raise RuntimeError(
+                f"Existing dataset columns differ at {path}: "
+                f"{actual.column_names}"
+            )
+        if len(actual) != len(expected):
+            raise RuntimeError(
+                f"Existing dataset length differs at {path}."
+            )
+        if dataset_digest(actual, columns) != expected_digest:
+            raise RuntimeError(
+                f"Existing dataset content differs at {path}."
+            )
+        return expected_digest
+
+    incomplete = f"{path}.incomplete"
+    if os.path.exists(incomplete):
+        raise RuntimeError(
+            f"Found incomplete input dataset: {incomplete}"
+        )
+    expected.save_to_disk(incomplete)
+    os.replace(incomplete, path)
+    return expected_digest
+
+os.makedirs(root, exist_ok=True)
+atomic_yaml(config_path, config)
+atomic_yaml(
+    f"{root}/iter_0/candidate_instructions.yaml",
+    candidate_payload,
+)
+
+clean_full = datasets.load_from_disk(clean_source)
+candidate_full = datasets.load_from_disk(candidate_source)
+if len(clean_full) < train_size or len(candidate_full) < train_size:
+    raise RuntimeError("A source dataset has fewer than 100 rows.")
+
+clean = clean_full.select(range(train_size)).select_columns(
+    ["problem", "solution", "original_trace"]
+)
+candidate = candidate_full.select(range(train_size)).select_columns(
+    ["problem", "solution", "original_trace", "rewrite_trace"]
+)
+
+for index in range(train_size):
+    for column in ("problem", "solution", "original_trace"):
+        if clean[index][column] != candidate[index][column]:
+            raise RuntimeError(
+                f"Clean/Candidate source mismatch at row {index}, "
+                f"column {column}."
+            )
+
+clean_columns = ["problem", "solution", "original_trace"]
+candidate_columns = [
+    "problem",
+    "solution",
+    "original_trace",
+    "rewrite_trace",
+]
+clean_digest = prepare_dataset(
+    f"{root}/original_traces",
+    clean,
+    clean_columns,
+)
+candidate_digest = prepare_dataset(
+    f"{root}/{candidate_name}",
+    candidate,
+    candidate_columns,
+)
+
+manifest = {
+    "protocol": protocol,
+    "selection": "first_100_rows",
+    "num_rows": train_size,
+    "clean_source": clean_source,
+    "candidate_source": candidate_source,
+    "clean_sha256": clean_digest,
+    "candidate_sha256": candidate_digest,
+}
+manifest_path = f"{root}/input_data_manifest.json"
+if os.path.exists(manifest_path):
+    with open(manifest_path, encoding="utf-8") as handle:
+        if json.load(handle) != manifest:
+            raise RuntimeError(
+                "Existing input-data manifest differs from this run."
+            )
+else:
+    temp_path = f"{manifest_path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, manifest_path)
+
+print("Stage 6A formal input preparation/alignment: PASS")
+print(json.dumps(manifest, indent=2, sort_keys=True))
+STAGE6A_FORMAL_INPUTS_PY
+
+RESULT_YAML="$FORMAL_ROOT/iter_0/instructions_and_scores.yaml"
+CLEAN_DIR="$FORMAL_ROOT/clean_comparators/$MODEL_DIRNAME"
+CANDIDATE_DIR="$FORMAL_ROOT/$CANDIDATE_NAME/finetuned_model/$MODEL_DIRNAME"
+CLEAN_MARKER="$CLEAN_DIR/.stage6a_complete"
+CANDIDATE_MARKER="$CANDIDATE_DIR/.stage6a_complete"
+COMPLETE_MARKER="$FORMAL_ROOT/COMPLETE"
+
+if [ -e "$RESULT_YAML" ] || [ -e "$COMPLETE_MARKER" ]; then
+    printf 'ERROR: formal-pilot result or COMPLETE marker already exists.\n'
+    exit 1
+fi
+
+if find "$FORMAL_ROOT" -type d -name '*.incomplete' -print -quit | grep -q .; then
+    printf 'ERROR: incomplete artifact detected; inspect before resuming.\n'
+    find "$FORMAL_ROOT" -type d -name '*.incomplete' -print
+    exit 1
+fi
+
+while IFS= read -r marker
+do
+    case "$marker" in
+        "$CLEAN_MARKER"|"$CANDIDATE_MARKER")
+            grep -Fxq "$PROTOCOL" "$marker" || {
+                printf 'ERROR: incompatible marker: %s\n' "$marker"
+                exit 1
+            }
+            ;;
+        *)
+            printf 'ERROR: unexpected completion marker: %s\n' "$marker"
+            exit 1
+            ;;
+    esac
+done < <(
+    find "$FORMAL_ROOT" \
+        -type f \
+        -name '.stage6a_complete' \
+        -print |
+    LC_ALL=C sort
+)
+
+if [ -f "$CANDIDATE_MARKER" ] && [ ! -f "$CLEAN_MARKER" ]; then
+    printf 'ERROR: Candidate is complete but Clean is missing.\n'
+    exit 1
+fi
+
+INITIAL_MARKERS="$(
+    find "$FORMAL_ROOT" \
+        -type f \
+        -name '.stage6a_complete' \
+        -print |
+    wc -l
+)"
+printf 'Initial completion markers: %s\n' "$INITIAL_MARKERS"
+
+case "$INITIAL_MARKERS" in
+    0) printf 'Run state: fresh formal pilot.\n' ;;
+    1) printf 'Run state: resuming after Clean training.\n' ;;
+    2) printf 'Run state: resuming after both training stages.\n' ;;
+    *)
+        printf 'ERROR: invalid completion-marker count.\n'
+        exit 1
+        ;;
+esac
+
+PROVENANCE_DIR="$FORMAL_ROOT/provenance"
+mkdir -p "$PROVENANCE_DIR"
+cp -- "$CONFIG" "$PROVENANCE_DIR/config.yaml"
+cp -- "$PBS_SCRIPT" "$PROVENANCE_DIR/launcher.pbs"
+sha256sum \
+    "$CONFIG" \
+    "$PBS_SCRIPT" \
+    "$REPO/optimize/score_candidates.py" \
+    "$REPO/src/evaluate.py" \
+    "$REPO/src/utils.py" \
+    > "$PROVENANCE_DIR/input_sha256.txt"
+git rev-parse HEAD > "$PROVENANCE_DIR/git_commit.txt"
+git status --short > "$PROVENANCE_DIR/git_status.txt"
+"$ENV/bin/python" -m pip freeze > "$PROVENANCE_DIR/pip_freeze.txt"
+{
+    printf 'recorded_at=%s\n' "$(date --iso-8601=seconds)"
+    printf 'job_id=%s\n' "$JOB_ID_LABEL"
+    printf 'host=%s\n' "$(hostname)"
+    printf 'branch=%s\n' "$CURRENT_BRANCH"
+    printf 'commit=%s\n' "$CURRENT_COMMIT"
+    printf 'protocol=%s\n' "$PROTOCOL"
+    printf 'run_kind=controlled_formal_pilot_v1\n'
+    printf 'evaluation_mode=vllm_dynamic_lora\n'
+    printf 'model_artifact=adapter_only\n'
+    printf 'reference_v3_root=%s\n' \
+        "$SCRATCH/results/stage6a-smoke-qwen3-1.7b-v3"
+} >> "$PROVENANCE_DIR/runtime_attempts.log"
+
+nvidia-smi \
+    --query-gpu=name,memory.total,driver_version \
+    --format=csv,noheader
+
+"$ENV/bin/python" - <<'STAGE6A_GPU_CHECK_PY'
+import torch
+
+assert torch.cuda.is_available(), "CUDA is unavailable."
+assert torch.cuda.device_count() == 1, (
+    f"Expected exactly 1 visible GPU; found {torch.cuda.device_count()}."
+)
+assert torch.cuda.is_bf16_supported(), (
+    "Assigned GPU does not support BF16."
+)
+print(f"PyTorch: {torch.__version__}")
+print(f"CUDA build: {torch.version.cuda}")
+print(f"GPU: {torch.cuda.get_device_name(0)}")
+print("GPU/BF16 preflight: PASS")
+STAGE6A_GPU_CHECK_PY
+
+"$ENV/bin/python" -u \
+    "$REPO/optimize/score_candidates.py" \
+    --config "$CONFIG"
+
+test -s "$RESULT_YAML"
+
+RESULT_YAML="$RESULT_YAML" \
+EXPECTED_MODEL="$SCRATCH/models/qwen3-1.7b-base-ea980cb0a6c2" \
+EXPECTED_CANDIDATE="$CANDIDATE_NAME" \
+"$ENV/bin/python" - <<'STAGE6A_RESULT_CHECK_PY'
+import math
+import os
+
+import yaml
+
+result_path = os.environ["RESULT_YAML"]
+expected_model = os.environ["EXPECTED_MODEL"]
+expected_candidate = os.environ["EXPECTED_CANDIDATE"]
+
+with open(result_path, encoding="utf-8") as handle:
+    result = yaml.safe_load(handle)
+
+entries = result.get("candidate_instructions")
+assert isinstance(entries, list)
+assert len(entries) == 1, len(entries)
+entry = entries[0]
+assert entry["name"] == expected_candidate
+assert entry["score"] is not None
+
+metrics = entry.get("proxy_metrics")
+assert isinstance(metrics, list)
+assert len(metrics) == 1
+metric = metrics[0]
+assert metric["model"] == expected_model
+assert metric["evaluation_mode"] == "vllm_dynamic_lora"
+
+clean = metric["clean_evaluation"]
+candidate = metric["candidate_evaluation"]
+for evaluation in (clean, candidate):
+    assert evaluation["num_examples"] == 100
+    assert evaluation["evaluation_mode"] == "vllm_dynamic_lora"
+    assert evaluation["base_model"] == expected_model
+    assert evaluation["inference_dtype"] == "bfloat16"
+    assert evaluation["adapter_rank"] == 16
+    assert 0 <= evaluation["raw_token_cap_count"] <= 100
+    assert math.isclose(
+        sum(evaluation["raw_finish_reason_counts"].values()),
+        100,
+    )
+
+expected_score = (
+    metric["clean_af_accuracy"]
+    - metric["candidate_af_accuracy"]
+)
+assert math.isclose(entry["score"], expected_score, abs_tol=1e-12)
+assert math.isclose(metric["accuracy_drop"], expected_score, abs_tol=1e-12)
+
+print(f"Candidate score: {entry['score']}")
+print(
+    "Clean Raw/AF/token-cap: "
+    f"{metric['clean_raw_accuracy']:.4f}/"
+    f"{metric['clean_af_accuracy']:.4f}/"
+    f"{metric['clean_raw_token_cap_count']}"
+)
+print(
+    "Candidate Raw/AF/token-cap: "
+    f"{metric['candidate_raw_accuracy']:.4f}/"
+    f"{metric['candidate_af_accuracy']:.4f}/"
+    f"{metric['candidate_raw_token_cap_count']}"
+)
+print("Formal-pilot result YAML validation: PASS")
+STAGE6A_RESULT_CHECK_PY
+
+for artifact_dir in "$CLEAN_DIR" "$CANDIDATE_DIR"
+do
+    test -f "$artifact_dir/.stage6a_complete"
+    grep -Fxq "$PROTOCOL" "$artifact_dir/.stage6a_complete"
+    test -f "$artifact_dir/stage6a_model_metadata.yaml"
+    test -f "$artifact_dir/adapter/adapter_config.json"
+    test -f "$artifact_dir/search_validation_evaluation/metrics.yaml"
+    test -s "$artifact_dir/search_validation_evaluation/evaluated_examples.jsonl"
+
+    if find "$artifact_dir" -maxdepth 1 -type f \
+        \( -name 'model*.safetensors' -o -name 'model*.bin' \) \
+        -print -quit | grep -q .
+    then
+        printf 'ERROR: dense weights found in adapter-only artifact: %s\n' \
+            "$artifact_dir"
+        exit 1
+    fi
+
+    if ! find "$artifact_dir/adapter" -maxdepth 1 -type f \
+        \( -name 'adapter_model.safetensors' -o -name 'adapter_model.bin' \) \
+        -print -quit | grep -q .
+    then
+        printf 'ERROR: adapter weights missing: %s\n' "$artifact_dir"
+        exit 1
+    fi
+done
+
+MARKER_COUNT="$(
+    find "$FORMAL_ROOT" \
+        -type f \
+        -name '.stage6a_complete' \
+        -print |
+    wc -l
+)"
+if [ "$MARKER_COUNT" -ne 2 ]; then
+    printf 'ERROR: expected exactly 2 model markers, found %s\n' \
+        "$MARKER_COUNT"
+    exit 1
+fi
+
+{
+    printf 'protocol=%s\n' "$PROTOCOL"
+    printf 'completed_at=%s\n' "$(date --iso-8601=seconds)"
+    printf 'job_id=%s\n' "$JOB_ID_LABEL"
+    printf 'commit=%s\n' "$CURRENT_COMMIT"
+} > "$COMPLETE_MARKER"
+
+printf '\nCompletion markers:\n'
+find "$FORMAL_ROOT" \
+    -type f \
+    -name '.stage6a_complete' \
+    -print |
+LC_ALL=C sort
+
+printf '\nResult file:\n%s\n' "$RESULT_YAML"
+sed -n '1,420p' "$RESULT_YAML"
+
+printf '\nStage 6A Qwen3 formal pilot v1: COMPLETE '
+printf '(model-quality interpretation pending manual review)\n'

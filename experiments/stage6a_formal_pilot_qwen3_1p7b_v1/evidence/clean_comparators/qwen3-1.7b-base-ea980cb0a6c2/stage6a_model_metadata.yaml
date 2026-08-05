@@ -1,0 +1,6 @@
+protocol: paper_a2_accuracy_v3_dynamic_lora_formal_pilot_v1
+artifact_type: lora_adapter_only
+base_model: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+tokenizer: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+training_dtype: bfloat16
+evaluation_mode: vllm_dynamic_lora

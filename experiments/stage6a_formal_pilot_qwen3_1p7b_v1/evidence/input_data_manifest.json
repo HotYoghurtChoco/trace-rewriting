@@ -1,0 +1,9 @@
+{
+  "candidate_sha256": "5e46bb2b0db9f5a6163db564354f26337073c8dc847aa3efee72a34db6a38634",
+  "candidate_source": "/home/z5463756/honour/papers/trace-rewriting/data/gsm8k/optimized",
+  "clean_sha256": "62fe00068036faa4193e1bb01c6be1a0b1ff15ff379e5d25a2fd2daadd1906d1",
+  "clean_source": "/home/z5463756/honour/papers/trace-rewriting/data/gsm8k/semantic",
+  "num_rows": 100,
+  "protocol": "paper_a2_accuracy_v3_dynamic_lora_formal_pilot_v1",
+  "selection": "first_100_rows"
+}

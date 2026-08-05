@@ -1,0 +1,5 @@
+candidate_instructions:
+- name: stage6a_formal_pilot_candidate_0
+  instruction: Stage 6A formal-pilot candidate backed by the existing optimized GSM8K
+    rewrite traces.
+  score: null

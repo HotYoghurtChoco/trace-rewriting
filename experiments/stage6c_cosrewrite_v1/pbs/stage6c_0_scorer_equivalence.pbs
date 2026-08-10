@@ -1,0 +1,106 @@
+#!/bin/bash
+#PBS -N tr-s6c-eq-v2
+#PBS -l select=1:ncpus=8:ngpus=1:mem=46gb:gpu_model=A100
+#PBS -l walltime=01:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-eq-v2.pbs.log
+
+set -euo pipefail
+
+WORKTREE="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+RESULT_ROOT="$SCRATCH/results/stage6c-cosrewrite-qwen3-1.7b-v1"
+EXPECTED_EXECUTION_COMMIT="${EXPECTED_EXECUTION_COMMIT:?Pass the committed 6C HEAD with qsub -v}"
+MODE="${EQUIV_MODE:-smoke}"
+
+SCORER_REL="optimize/gradient_feedback.py"
+SCORE_HELPER_REL="optimize/score_candidates.py"
+UTILS_REL="src/utils.py"
+VERIFY_REL="experiments/stage6c_cosrewrite_v1/verify_scorer_equivalence.py"
+LAUNCHER_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_0_scorer_equivalence.pbs"
+
+if [[ "$MODE" != "smoke" && "$MODE" != "formal" ]]; then
+    echo "FAIL: EQUIV_MODE must be smoke or formal"
+    exit 1
+fi
+
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$RESULT_ROOT/scorer_equivalence/${MODE}_$JOB_ID_LABEL"
+RUNTIME_DIR="$OUT_DIR/runtime"
+
+module purge
+module load python/3.11.3
+cd "$WORKTREE"
+
+if [[ "$(git branch --show-current)" != "research/stage6c-cosrewrite" ]]; then
+    echo "FAIL: unexpected Stage 6C branch"
+    exit 1
+fi
+if [[ "$(git rev-parse HEAD)" != "$EXPECTED_EXECUTION_COMMIT" ]]; then
+    echo "FAIL: execution commit mismatch"
+    exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAIL: tracked or staged changes exist"
+    git status --short
+    exit 1
+fi
+
+for relative_path in \
+    "$SCORER_REL" \
+    "$SCORE_HELPER_REL" \
+    "$UTILS_REL" \
+    "$VERIFY_REL" \
+    "$LAUNCHER_REL"
+do
+    git cat-file -e "HEAD:$relative_path"
+done
+
+if [[ -e "$OUT_DIR" ]]; then
+    echo "FAIL: output directory already exists: $OUT_DIR"
+    exit 1
+fi
+mkdir -p \
+    "$OUT_DIR/provenance" \
+    "$RUNTIME_DIR/optimize" \
+    "$RUNTIME_DIR/src" \
+    "$RUNTIME_DIR/experiments/stage6c_cosrewrite_v1"
+
+git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
+git show "HEAD:$SCORER_REL" > "$RUNTIME_DIR/$SCORER_REL"
+git show "HEAD:$SCORE_HELPER_REL" > "$RUNTIME_DIR/$SCORE_HELPER_REL"
+git show "HEAD:$UTILS_REL" > "$RUNTIME_DIR/$UTILS_REL"
+git show "HEAD:$VERIFY_REL" > "$RUNTIME_DIR/$VERIFY_REL"
+
+export PYTHONPATH="$RUNTIME_DIR/src:$RUNTIME_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "mode: $MODE"
+echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
+echo "out_dir: $OUT_DIR"
+echo
+nvidia-smi
+
+cd "$RUNTIME_DIR"
+"$ENV/bin/python" "$RUNTIME_DIR/$VERIFY_REL" \
+    --mode "$MODE" \
+    --output-dir "$OUT_DIR" \
+    --execution-commit "$EXPECTED_EXECUTION_COMMIT" \
+    2>&1 | tee "$OUT_DIR/run.log"
+
+printf 'status=PASS\nmethod=stage6c_gradient_scorer_equivalence_v2\nmode=%s\njob_id=%s\ncommit=%s\n' \
+    "$MODE" "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
+    > "$OUT_DIR/COMPLETE"
+
+echo
+echo "PASS: Stage 6C scorer equivalence $MODE completed"
+echo "out_dir: $OUT_DIR"

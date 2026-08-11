@@ -1,9 +1,9 @@
 #!/bin/bash
-#PBS -N tr-s6c-eq-v2
+#PBS -N tr-s6c-eq-v3
 #PBS -l select=1:ncpus=8:ngpus=1:mem=46gb:gpu_model=A100
 #PBS -l walltime=01:00:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-eq-v2.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-eq-v3.pbs.log
 
 set -euo pipefail
 
@@ -91,13 +91,29 @@ echo
 nvidia-smi
 
 cd "$RUNTIME_DIR"
+set +e
 "$ENV/bin/python" "$RUNTIME_DIR/$VERIFY_REL" \
     --mode "$MODE" \
     --output-dir "$OUT_DIR" \
     --execution-commit "$EXPECTED_EXECUTION_COMMIT" \
     2>&1 | tee "$OUT_DIR/run.log"
+pipeline_status=("${PIPESTATUS[@]}")
+set -e
 
-printf 'status=PASS\nmethod=stage6c_gradient_scorer_equivalence_v2\nmode=%s\njob_id=%s\ncommit=%s\n' \
+verifier_status="${pipeline_status[0]}"
+tee_status="${pipeline_status[1]}"
+if (( verifier_status != 0 || tee_status != 0 )); then
+    printf 'status=FAIL\nmethod=stage6c_gradient_scorer_equivalence_v3\nmode=%s\njob_id=%s\ncommit=%s\nverifier_exit_status=%s\ntee_exit_status=%s\n' \
+        "$MODE" "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
+        "$verifier_status" "$tee_status" \
+        > "$OUT_DIR/FAILED"
+    echo
+    echo "FAIL: Stage 6C scorer equivalence $MODE failed"
+    echo "out_dir: $OUT_DIR"
+    exit 1
+fi
+
+printf 'status=PASS\nmethod=stage6c_gradient_scorer_equivalence_v3\nmode=%s\njob_id=%s\ncommit=%s\n' \
     "$MODE" "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
     > "$OUT_DIR/COMPLETE"
 

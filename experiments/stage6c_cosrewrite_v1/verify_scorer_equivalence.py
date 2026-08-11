@@ -13,6 +13,9 @@ Unlike the first draft, PASS requires all of the following:
 * token metadata is unchanged; and
 * every trainable and frozen model parameter is byte-identical before and
   after scoring.
+
+Candidate gate failures are recorded rather than raised immediately so a
+formal run produces a complete diagnostic vector before returning failure.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer
 from optimize.score_candidates import _load_training_tokenizer
 
 
-METHOD_VERSION = "stage6c_gradient_scorer_equivalence_v2"
+METHOD_VERSION = "stage6c_gradient_scorer_equivalence_v3"
 SCORING_SEED = 888
 EXPECTED_CANDIDATE_COUNT = 100
 EXPECTED_REFERENCE_COUNT = 100
@@ -749,6 +752,7 @@ def main() -> None:
     recomputed_dots = []
     frozen_cosines = []
     recomputed_cosines = []
+    candidate_failure_records = []
 
     for position, candidate_index in enumerate(candidate_indices, start=1):
         candidate = candidate_rows[candidate_index]
@@ -781,11 +785,6 @@ def main() -> None:
         }
         actual_tokens = score.tokens.to_dict()
         token_metadata_gate = actual_tokens == expected_tokens
-        if not token_metadata_gate:
-            raise RuntimeError(
-                f"Token metadata mismatch for candidate {candidate_index}: "
-                f"expected={expected_tokens}, actual={actual_tokens}"
-            )
 
         frozen_dot = finite_number(
             frozen_score["gradient_dot"],
@@ -845,12 +844,6 @@ def main() -> None:
             )
             if not passed
         ]
-        if failed_gates:
-            raise RuntimeError(
-                f"Candidate {candidate_index} equivalence gate failed: "
-                + ", ".join(failed_gates)
-            )
-
         row = {
             "candidate_index": candidate_index,
             "gradient_rank": int(frozen_score["gradient_rank"]),
@@ -867,7 +860,7 @@ def main() -> None:
                 frozen_loss,
             ),
             "candidate_loss_tolerance": loss_tolerance,
-            "candidate_loss_gate": "PASS",
+            "candidate_loss_gate": "PASS" if loss_gate else "FAIL",
             "frozen_candidate_gradient_norm": frozen_candidate_norm,
             "recomputed_candidate_gradient_norm": score.gradient_norm,
             "candidate_gradient_norm_absolute_error": norm_absolute_error,
@@ -876,7 +869,9 @@ def main() -> None:
                 frozen_candidate_norm,
             ),
             "candidate_gradient_norm_tolerance": norm_tolerance,
-            "candidate_gradient_norm_gate": "PASS",
+            "candidate_gradient_norm_gate": (
+                "PASS" if norm_gate else "FAIL"
+            ),
             "frozen_gradient_dot": frozen_dot,
             "recomputed_gradient_dot": score.gradient_dot,
             "gradient_dot_absolute_error": dot_absolute_error,
@@ -885,25 +880,67 @@ def main() -> None:
             "normalized_dot_discrepancy_limit": (
                 NORMALIZED_DOT_DISCREPANCY_MAX
             ),
-            "gradient_dot_gate": "PASS",
+            "gradient_dot_gate": "PASS" if dot_gate else "FAIL",
             "frozen_gradient_cosine": frozen_cosine,
             "recomputed_gradient_cosine": score.gradient_cosine,
             "gradient_cosine_absolute_error": cosine_absolute_error,
             "gradient_cosine_absolute_error_limit": (
                 COSINE_ABSOLUTE_ERROR_MAX
             ),
-            "gradient_cosine_gate": "PASS",
+            "gradient_cosine_gate": "PASS" if cosine_gate else "FAIL",
             "recomputed_predicted_reference_loss_change_per_unit_step": (
                 score.predicted_reference_loss_change_per_unit_step
             ),
-            "token_metadata_gate": "PASS",
+            "token_metadata_gate": (
+                "PASS" if token_metadata_gate else "FAIL"
+            ),
+            "expected_tokens": expected_tokens,
             "tokens": actual_tokens,
+            "failed_gates": failed_gates,
         }
         result_rows.append(row)
         frozen_dots.append(frozen_dot)
         recomputed_dots.append(score.gradient_dot)
         frozen_cosines.append(frozen_cosine)
         recomputed_cosines.append(score.gradient_cosine)
+        if failed_gates:
+            candidate_failure_records.append(
+                {
+                    "candidate_index": candidate_index,
+                    "gradient_rank": int(frozen_score["gradient_rank"]),
+                    "failed_gates": failed_gates,
+                    "candidate_loss": {
+                        "frozen": frozen_loss,
+                        "recomputed": score.loss,
+                        "absolute_error": loss_absolute_error,
+                        "tolerance": loss_tolerance,
+                    },
+                    "candidate_gradient_norm": {
+                        "frozen": frozen_candidate_norm,
+                        "recomputed": score.gradient_norm,
+                        "absolute_error": norm_absolute_error,
+                        "tolerance": norm_tolerance,
+                    },
+                    "gradient_dot": {
+                        "frozen": frozen_dot,
+                        "recomputed": score.gradient_dot,
+                        "normalized_discrepancy": (
+                            normalized_dot_discrepancy
+                        ),
+                        "limit": NORMALIZED_DOT_DISCREPANCY_MAX,
+                    },
+                    "gradient_cosine": {
+                        "frozen": frozen_cosine,
+                        "recomputed": score.gradient_cosine,
+                        "absolute_error": cosine_absolute_error,
+                        "limit": COSINE_ABSOLUTE_ERROR_MAX,
+                    },
+                    "token_metadata": {
+                        "expected": expected_tokens,
+                        "recomputed": actual_tokens,
+                    },
+                }
+            )
         print(
             "candidate_complete: "
             f"{position}/{len(candidate_indices)} "
@@ -912,8 +949,20 @@ def main() -> None:
             f"dot_error={normalized_dot_discrepancy:.9g} "
             f"cosine_error={cosine_absolute_error:.9g} "
             f"loss_error={loss_absolute_error:.9g} "
-            f"norm_error={norm_absolute_error:.9g}"
+            f"norm_error={norm_absolute_error:.9g} "
+            f"status={'FAIL' if failed_gates else 'PASS'}"
         )
+        if failed_gates:
+            print(
+                "candidate_gate_failure: "
+                f"index={candidate_index} "
+                f"rank={row['gradient_rank']} "
+                f"failed_gates={','.join(failed_gates)} "
+                f"frozen_norm={frozen_candidate_norm:.17g} "
+                f"recomputed_norm={score.gradient_norm:.17g} "
+                f"norm_error={norm_absolute_error:.17g} "
+                f"norm_tolerance={norm_tolerance:.17g}"
+            )
 
     dot_spearman = spearman_correlation(frozen_dots, recomputed_dots)
     cosine_spearman = spearman_correlation(
@@ -930,11 +979,6 @@ def main() -> None:
         if args.mode == "formal"
         else None
     )
-    if args.mode == "formal" and not formal_dot_vector_gate:
-        raise RuntimeError("Formal frozen/recomputed dot Spearman gate failed")
-    if args.mode == "formal" and not formal_cosine_vector_gate:
-        raise RuntimeError("Formal frozen/recomputed cosine Spearman gate failed")
-
     model.zero_grad(set_to_none=True)
     trainable_versions_after = {
         name: parameter._version for name, parameter in trainable
@@ -963,8 +1007,32 @@ def main() -> None:
     print(f"frozen_parameter_sha256_after: {frozen_sha_after}")
     print("parameter_integrity: PASS_NO_PARAMETER_UPDATE")
 
+    gate_names = (
+        "dot",
+        "candidate_loss",
+        "candidate_gradient_norm",
+        "gradient_cosine",
+        "token_metadata",
+    )
+    gate_failure_counts = {
+        gate_name: sum(
+            gate_name in row["failed_gates"] for row in result_rows
+        )
+        for gate_name in gate_names
+    }
+    candidate_gates_pass = not candidate_failure_records
+    vector_gates_pass = (
+        args.mode != "formal"
+        or (
+            bool(formal_dot_vector_gate)
+            and bool(formal_cosine_vector_gate)
+        )
+    )
+    overall_pass = candidate_gates_pass and vector_gates_pass
+    overall_status = "PASS" if overall_pass else "FAIL"
+
     summary = {
-        "status": "PASS",
+        "status": overall_status,
         "method_version": METHOD_VERSION,
         "mode": args.mode,
         "execution_commit": args.execution_commit,
@@ -1001,12 +1069,40 @@ def main() -> None:
             "norm_tolerance": reference_norm_tolerance,
         },
         "candidate_equivalence": {
-            "status": "PASS",
-            "per_candidate_dot_gate": "PASS",
-            "per_candidate_loss_gate": "PASS",
-            "per_candidate_gradient_norm_gate": "PASS",
-            "per_candidate_cosine_gate": "PASS",
-            "per_candidate_token_metadata_gate": "PASS",
+            "status": overall_status,
+            "per_candidate_status": (
+                "PASS" if candidate_gates_pass else "FAIL"
+            ),
+            "failed_candidate_count": len(candidate_failure_records),
+            "failed_candidate_indices": [
+                item["candidate_index"]
+                for item in candidate_failure_records
+            ],
+            "failure_records": candidate_failure_records,
+            "gate_failure_counts": gate_failure_counts,
+            "per_candidate_dot_gate": (
+                "PASS" if gate_failure_counts["dot"] == 0 else "FAIL"
+            ),
+            "per_candidate_loss_gate": (
+                "PASS"
+                if gate_failure_counts["candidate_loss"] == 0
+                else "FAIL"
+            ),
+            "per_candidate_gradient_norm_gate": (
+                "PASS"
+                if gate_failure_counts["candidate_gradient_norm"] == 0
+                else "FAIL"
+            ),
+            "per_candidate_cosine_gate": (
+                "PASS"
+                if gate_failure_counts["gradient_cosine"] == 0
+                else "FAIL"
+            ),
+            "per_candidate_token_metadata_gate": (
+                "PASS"
+                if gate_failure_counts["token_metadata"] == 0
+                else "FAIL"
+            ),
             "normalized_dot_discrepancy_maximum": max(
                 row["normalized_dot_discrepancy"]
                 for row in result_rows
@@ -1035,12 +1131,20 @@ def main() -> None:
             "formal_dot_vector_gate": (
                 "PASS"
                 if formal_dot_vector_gate is True
-                else "NOT_APPLICABLE_TO_SMOKE"
+                else (
+                    "FAIL"
+                    if formal_dot_vector_gate is False
+                    else "NOT_APPLICABLE_TO_SMOKE"
+                )
             ),
             "formal_cosine_vector_gate": (
                 "PASS"
                 if formal_cosine_vector_gate is True
-                else "NOT_APPLICABLE_TO_SMOKE"
+                else (
+                    "FAIL"
+                    if formal_cosine_vector_gate is False
+                    else "NOT_APPLICABLE_TO_SMOKE"
+                )
             ),
         },
         "parameter_integrity": {
@@ -1066,10 +1170,22 @@ def main() -> None:
                 REPRODUCIBILITY_SPEARMAN_MIN
             ),
         },
+        "failure_reason": (
+            None
+            if overall_pass
+            else (
+                "One or more locked scorer-equivalence gates failed. "
+                "No tolerance was changed; inspect candidate rows and "
+                "failure_records before deciding whether the difference "
+                "is implementation drift or numerical reproducibility."
+            )
+        ),
         "interpretation_boundary": (
             "PASS establishes scorer implementation equivalence only; "
-            "it is not evidence that Stage 6C improves rewrite quality "
-            "or student accuracy."
+            "FAIL preserves diagnostic evidence but does not by itself "
+            "identify implementation drift versus numerical "
+            "reproducibility. Neither status is evidence that Stage 6C "
+            "improves rewrite quality or student accuracy."
         ),
     }
 
@@ -1083,7 +1199,11 @@ def main() -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
     print(f"summary_path: {summary_path}")
     print(f"candidate_rows_path: {rows_path}")
-    print(f"stage6c_scorer_equivalence_{args.mode}: PASS")
+    print(
+        f"stage6c_scorer_equivalence_{args.mode}: {overall_status}"
+    )
+    if not overall_pass:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

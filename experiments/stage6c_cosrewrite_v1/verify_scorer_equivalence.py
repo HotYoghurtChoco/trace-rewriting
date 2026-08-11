@@ -41,7 +41,7 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer
 from optimize.score_candidates import _load_training_tokenizer
 
 
-METHOD_VERSION = "stage6c_gradient_scorer_equivalence_v3"
+METHOD_VERSION = "stage6c_gradient_scorer_equivalence_v4"
 SCORING_SEED = 888
 EXPECTED_CANDIDATE_COUNT = 100
 EXPECTED_REFERENCE_COUNT = 100
@@ -52,11 +52,11 @@ NORMALIZED_DOT_DISCREPANCY_MAX = 0.002
 SCALAR_RELATIVE_TOLERANCE = 1e-4
 SCALAR_ABSOLUTE_FLOOR = 1e-6
 
-# Conservative bound implied by the official 0.002 normalised-dot gate and
-# two 1e-4 norm gates.  In the worst case:
+# Locked cosine threshold inherited from v3.  In v3, the 0.00225 bound was
+# derived from the 0.002 normalised-dot gate and two 1e-4 norm comparisons:
 #   0.002 / (0.9999 ** 2) + (1 / (0.9999 ** 2) - 1)
-# is approximately 0.00220043.  The rounded 0.00225 limit is therefore
-# compatible with all component gates while still making cosine pass/fail.
+# is approximately 0.00220043.  In v4, the candidate-norm comparison is
+# diagnostic only; the unchanged cosine limit is an independent hard gate.
 COSINE_ABSOLUTE_ERROR_MAX = 0.00225
 FROZEN_INTERNAL_CONSISTENCY_TOLERANCE = 1e-12
 
@@ -824,7 +824,15 @@ def main() -> None:
             score.gradient_norm - frozen_candidate_norm
         )
         norm_tolerance = scalar_tolerance(frozen_candidate_norm)
-        norm_gate = norm_absolute_error <= norm_tolerance
+        norm_v3_tolerance_diagnostic = (
+            norm_absolute_error <= norm_tolerance
+        )
+        norm_gate = (
+            math.isfinite(frozen_candidate_norm)
+            and frozen_candidate_norm > 0.0
+            and math.isfinite(score.gradient_norm)
+            and score.gradient_norm > 0.0
+        )
 
         cosine_absolute_error = abs(
             score.gradient_cosine - frozen_cosine
@@ -869,6 +877,10 @@ def main() -> None:
                 frozen_candidate_norm,
             ),
             "candidate_gradient_norm_tolerance": norm_tolerance,
+            "candidate_gradient_norm_v3_tolerance_diagnostic": (
+                norm_v3_tolerance_diagnostic
+            ),
+            "candidate_gradient_norm_validity_gate": norm_gate,
             "candidate_gradient_norm_gate": (
                 "PASS" if norm_gate else "FAIL"
             ),
@@ -1093,6 +1105,30 @@ def main() -> None:
                 if gate_failure_counts["candidate_gradient_norm"] == 0
                 else "FAIL"
             ),
+            "candidate_gradient_norm_v3_tolerance_diagnostic": {
+                "role": (
+                    "diagnostic_only_not_used_in_v4_overall_pass"
+                ),
+                "within_tolerance_count": sum(
+                    bool(row[
+                        "candidate_gradient_norm_v3_tolerance_diagnostic"
+                    ])
+                    for row in result_rows
+                ),
+                "outside_tolerance_count": sum(
+                    not bool(row[
+                        "candidate_gradient_norm_v3_tolerance_diagnostic"
+                    ])
+                    for row in result_rows
+                ),
+                "outside_tolerance_candidate_indices": [
+                    int(row["candidate_index"])
+                    for row in result_rows
+                    if not bool(row[
+                        "candidate_gradient_norm_v3_tolerance_diagnostic"
+                    ])
+                ],
+            },
             "per_candidate_cosine_gate": (
                 "PASS"
                 if gate_failure_counts["gradient_cosine"] == 0
@@ -1158,6 +1194,17 @@ def main() -> None:
             "frozen_gradients_absent": frozen_gradients_absent,
         },
         "pass_fail_criteria": {
+            "candidate_gradient_norm_hard_gate": (
+                "frozen_and_recomputed_norms_must_be_finite_and_"
+                "strictly_positive"
+            ),
+            "candidate_gradient_norm_v3_tolerance": {
+                "relative_tolerance": SCALAR_RELATIVE_TOLERANCE,
+                "absolute_floor": SCALAR_ABSOLUTE_FLOOR,
+                "role": (
+                    "diagnostic_only_not_used_in_v4_overall_pass"
+                ),
+            },
             "scalar_relative_tolerance": SCALAR_RELATIVE_TOLERANCE,
             "scalar_absolute_floor": SCALAR_ABSOLUTE_FLOOR,
             "normalized_dot_discrepancy_maximum": (

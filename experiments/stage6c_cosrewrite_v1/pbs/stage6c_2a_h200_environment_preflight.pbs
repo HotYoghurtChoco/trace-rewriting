@@ -1,0 +1,192 @@
+#!/bin/bash
+#PBS -N tr-s6c-h2env-v1
+#PBS -l select=1:ncpus=4:ngpus=1:mem=16gb:gpu_model=H200
+#PBS -l walltime=00:15:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-h2env-v1.pbs.log
+
+set -euo pipefail
+
+WORKTREE="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+RESULT_ROOT="$SCRATCH/results/stage6c-cosrewrite-qwen3-1.7b-v1"
+EXPECTED_EXECUTION_COMMIT="${EXPECTED_EXECUTION_COMMIT:?Pass the committed 6C HEAD with qsub -v}"
+
+LAUNCHER_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2a_h200_environment_preflight.pbs"
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$RESULT_ROOT/backend_preflight/h200_environment_$JOB_ID_LABEL"
+HELP_FILE="$OUT_DIR/vllm_serve_help.txt"
+
+module purge
+module load python/3.11.3
+cd "$WORKTREE"
+
+if [[ "$(git branch --show-current)" != "research/stage6c-cosrewrite" ]]; then
+    echo "FAIL: unexpected Stage 6C branch"
+    exit 1
+fi
+if [[ "$(git rev-parse HEAD)" != "$EXPECTED_EXECUTION_COMMIT" ]]; then
+    echo "FAIL: execution commit mismatch"
+    exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAIL: tracked or staged changes exist"
+    git status --short
+    exit 1
+fi
+git cat-file -e "HEAD:$LAUNCHER_REL"
+
+if [[ -e "$OUT_DIR" ]]; then
+    echo "FAIL: output directory already exists: $OUT_DIR"
+    exit 1
+fi
+mkdir -p "$OUT_DIR/provenance"
+
+git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
+
+export HF_HOME="$SCRATCH/cache/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+export VLLM_LOGGING_LEVEL=INFO
+
+set +e
+(
+    set -euo pipefail
+
+    echo "===== JOB ====="
+    echo "PBS_JOBID: $PBS_JOBID"
+    echo "hostname: $(hostname)"
+    echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
+    echo "out_dir: $OUT_DIR"
+    echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-UNSET}"
+    echo "timestamp_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo
+
+    echo "===== NVIDIA ====="
+    nvidia-smi
+    echo
+    nvidia-smi \
+        --query-gpu=index,name,uuid,driver_version,memory.total \
+        --format=csv,noheader
+    echo
+
+    echo "===== PYTORCH AND VLLM ====="
+    "$ENV/bin/python" - <<'PY'
+import importlib
+import importlib.metadata
+import platform
+import sys
+
+import torch
+
+print(f"python_executable={sys.executable}")
+print(f"python_version={platform.python_version()}")
+print(f"torch_version={importlib.metadata.version('torch')}")
+print(f"torch_compiled_cuda={torch.version.cuda}")
+print(f"cuda_available={torch.cuda.is_available()}")
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available")
+
+device_count = torch.cuda.device_count()
+print(f"visible_cuda_device_count={device_count}")
+if device_count != 1:
+    raise RuntimeError(f"Expected exactly one visible GPU, found {device_count}")
+
+properties = torch.cuda.get_device_properties(0)
+device_name = properties.name
+total_memory_gib = properties.total_memory / (1024 ** 3)
+capability = torch.cuda.get_device_capability(0)
+bf16_supported = torch.cuda.is_bf16_supported()
+
+print(f"device_name={device_name}")
+print(f"device_total_memory_GiB={total_memory_gib:.3f}")
+print(f"device_compute_capability={capability[0]}.{capability[1]}")
+print(f"bf16_supported={bf16_supported}")
+print(f"torch_arch_list={torch.cuda.get_arch_list()}")
+
+if "H200" not in device_name.upper():
+    raise RuntimeError(f"Expected an H200, found {device_name}")
+if total_memory_gib < 100:
+    raise RuntimeError(f"Expected at least 100 GiB VRAM, found {total_memory_gib:.3f}")
+if capability[0] < 9:
+    raise RuntimeError(f"Expected Hopper-or-later capability, found {capability}")
+if not bf16_supported:
+    raise RuntimeError("BF16 is not supported")
+
+left = torch.randn((512, 512), device="cuda", dtype=torch.bfloat16)
+right = torch.randn((512, 512), device="cuda", dtype=torch.bfloat16)
+result = left @ right
+torch.cuda.synchronize()
+print(f"torch_bf16_matmul=PASS shape={tuple(result.shape)} dtype={result.dtype}")
+
+print(f"vllm_version={importlib.metadata.version('vllm')}")
+importlib.import_module("vllm._C")
+print("vllm_cuda_extension_import=PASS")
+PY
+    echo
+
+    echo "===== VLLM SERVE HELP ====="
+    "$ENV/bin/vllm" serve --help=all > "$HELP_FILE" 2>&1
+    echo "vllm_serve_help=PASS"
+
+    required_options=(
+        --tensor-parallel-size
+        --gpu-memory-utilization
+        --max-model-len
+        --dtype
+        --quantization
+        --seed
+        --served-model-name
+        --revision
+        --host
+        --port
+    )
+
+    for option in "${required_options[@]}"; do
+        if ! grep -Fq -- "$option" "$HELP_FILE"; then
+            echo "FAIL: missing vLLM serve option: $option"
+            exit 1
+        fi
+        echo "option_present=$option"
+    done
+
+    echo
+    echo "Relevant help lines:"
+    grep -niEm 120 -- \
+        'tensor.parallel|gpu.memory|max.model.len|dtype|quantization|seed|served.model|revision|host|port' \
+        "$HELP_FILE"
+
+    echo
+    echo "PASS: H200 environment preflight completed without loading a model"
+) 2>&1 | tee "$OUT_DIR/run.log"
+pipeline_status=("${PIPESTATUS[@]}")
+set -e
+
+preflight_status="${pipeline_status[0]}"
+tee_status="${pipeline_status[1]}"
+if (( preflight_status != 0 || tee_status != 0 )); then
+    printf 'status=FAIL\nmethod=stage6c_2a_h200_environment_preflight_v1\njob_id=%s\ncommit=%s\npreflight_exit_status=%s\ntee_exit_status=%s\n' \
+        "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
+        "$preflight_status" "$tee_status" \
+        > "$OUT_DIR/FAILED"
+    echo
+    echo "FAIL: Stage 6C.2a H200 environment preflight failed"
+    echo "out_dir: $OUT_DIR"
+    exit 1
+fi
+
+printf 'status=PASS\nmethod=stage6c_2a_h200_environment_preflight_v1\njob_id=%s\ncommit=%s\nmodel_loaded=false\nmodel_download_attempted=false\n' \
+    "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
+    > "$OUT_DIR/COMPLETE"
+
+echo
+echo "PASS: Stage 6C.2a H200 environment preflight completed"
+echo "out_dir: $OUT_DIR"

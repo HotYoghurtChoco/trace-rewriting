@@ -1,0 +1,179 @@
+#!/bin/bash
+#PBS -N tr-s6c-ossdl-v1
+#PBS -l select=1:ncpus=4:mem=8gb
+#PBS -l walltime=04:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-ossdl-v1.pbs.log
+
+set -euo pipefail
+
+WORKTREE="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+RESULT_ROOT="$SCRATCH/results/stage6c-cosrewrite-qwen3-1.7b-v1"
+MODEL_ID="openai/gpt-oss-120b"
+MODEL_REVISION="b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+EXPECTED_DOWNLOAD_BYTES=65276859410
+RESERVE_BYTES=$((12 * 1024 * 1024 * 1024))
+EXPECTED_EXECUTION_COMMIT="${EXPECTED_EXECUTION_COMMIT:?Pass the committed 6C HEAD with qsub -v}"
+
+LAUNCHER_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2b_gptoss_snapshot_download.pbs"
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$RESULT_ROOT/backend_preflight/gptoss_snapshot_download_$JOB_ID_LABEL"
+
+module purge
+module load python/3.11.3
+cd "$WORKTREE"
+
+if [[ "$(git branch --show-current)" != "research/stage6c-cosrewrite" ]]; then
+    echo "FAIL: unexpected Stage 6C branch"
+    exit 1
+fi
+if [[ "$(git rev-parse HEAD)" != "$EXPECTED_EXECUTION_COMMIT" ]]; then
+    echo "FAIL: execution commit mismatch"
+    exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAIL: tracked or staged changes exist"
+    git status --short
+    exit 1
+fi
+git cat-file -e "HEAD:$LAUNCHER_REL"
+
+if [[ -e "$OUT_DIR" ]]; then
+    echo "FAIL: output directory already exists: $OUT_DIR"
+    exit 1
+fi
+mkdir -p "$OUT_DIR/provenance"
+
+git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
+
+export HF_HOME="$SCRATCH/cache/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_XET_CACHE="$HF_HOME/xet"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+export HF_HUB_DOWNLOAD_TIMEOUT=120
+export HF_XET_CHUNK_CACHE_SIZE_BYTES=0
+export TOKENIZERS_PARALLELISM=false
+unset HF_HUB_OFFLINE HF_DATASETS_OFFLINE TRANSFORMERS_OFFLINE
+
+available_bytes="$(df -PB1 "$SCRATCH" | awk 'NR == 2 {print $4}')"
+required_bytes=$((EXPECTED_DOWNLOAD_BYTES + RESERVE_BYTES))
+if (( available_bytes < required_bytes )); then
+    echo "FAIL: insufficient Scratch space"
+    echo "available_bytes=$available_bytes"
+    echo "required_bytes=$required_bytes"
+    exit 1
+fi
+
+mark_failed() {
+    status=$?
+    trap - EXIT
+    printf 'status=FAIL\nmethod=stage6c_2b_gptoss_snapshot_download_v1\njob_id=%s\ncommit=%s\nmodel_id=%s\nmodel_revision=%s\nexit_status=%s\n' \
+        "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" "$MODEL_ID" "$MODEL_REVISION" \
+        "$status" > "$OUT_DIR/FAILED"
+    exit "$status"
+}
+trap mark_failed EXIT
+exec > >(tee "$OUT_DIR/run.log") 2>&1
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
+echo "out_dir: $OUT_DIR"
+echo "model_id: $MODEL_ID"
+echo "model_revision: $MODEL_REVISION"
+echo "expected_download_bytes: $EXPECTED_DOWNLOAD_BYTES"
+echo "available_bytes_before: $available_bytes"
+echo "required_bytes_with_reserve: $required_bytes"
+echo "timestamp_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo
+
+"$ENV/bin/python" - "$OUT_DIR" "$MODEL_ID" "$MODEL_REVISION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+out_dir = Path(sys.argv[1])
+model_id = sys.argv[2]
+model_revision = sys.argv[3]
+
+print(f"model_id={model_id}")
+print(f"revision={model_revision}")
+
+snapshot_path = Path(
+    snapshot_download(
+        repo_id=model_id,
+        revision=model_revision,
+        ignore_patterns=["metal/*", "original/*"],
+        max_workers=4,
+    )
+)
+if snapshot_path.name != model_revision:
+    raise RuntimeError(
+        f"Snapshot path revision {snapshot_path.name} != requested {model_revision}"
+    )
+
+if (snapshot_path / "metal").exists() or (snapshot_path / "original").exists():
+    raise RuntimeError("Excluded alternative-weight directory exists in snapshot")
+
+required_files = [
+    "config.json",
+    "model.safetensors.index.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+]
+missing_required = [
+    name for name in required_files if not (snapshot_path / name).is_file()
+]
+if missing_required:
+    raise RuntimeError(f"Missing required model files: {missing_required}")
+
+index = json.loads((snapshot_path / "model.safetensors.index.json").read_text())
+weight_files = sorted(set(index["weight_map"].values()))
+missing_weights = [
+    name for name in weight_files if not (snapshot_path / name).is_file()
+]
+if missing_weights:
+    raise RuntimeError(f"Missing indexed weight files: {missing_weights}")
+
+summary = {
+    "model_id": model_id,
+    "revision": model_revision,
+    "snapshot_path": str(snapshot_path),
+    "excluded_prefixes": ["metal/", "original/"],
+    "weight_file_count": len(weight_files),
+}
+(out_dir / "model_snapshot_summary.json").write_text(
+    json.dumps(summary, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+(out_dir / "snapshot_path.txt").write_text(
+    str(snapshot_path) + "\n",
+    encoding="utf-8",
+)
+
+print(f"snapshot_path={snapshot_path}")
+print(f"weight_file_count={len(weight_files)}")
+print("snapshot_validation=PASS")
+PY
+
+echo
+echo "===== STORAGE AFTER DOWNLOAD ====="
+du -sh "$HF_HOME"
+df -h "$SCRATCH"
+
+printf 'status=PASS\nmethod=stage6c_2b_gptoss_snapshot_download_v1\njob_id=%s\ncommit=%s\nmodel_id=%s\nmodel_revision=%s\nselected_bytes=%s\nmodel_loaded=false\napi_tested=false\n' \
+    "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" "$MODEL_ID" "$MODEL_REVISION" \
+    "$EXPECTED_DOWNLOAD_BYTES" \
+    > "$OUT_DIR/COMPLETE"
+trap - EXIT
+
+echo
+echo "PASS: GPT-OSS-120B controlled snapshot download completed"
+echo "out_dir: $OUT_DIR"

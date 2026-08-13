@@ -1,0 +1,264 @@
+#!/bin/bash
+#PBS -N tr-s6c-vllm-img-v1
+#PBS -l select=1:ncpus=4:mem=16gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-vllm-img-v1.pbs.log
+
+set -Eeuo pipefail
+umask 077
+
+METHOD="stage6c_2c1_vllm_container_acquire_v1"
+REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+SCRATCH_ROOT="/srv/scratch/z5463756/honour"
+CONTAINER_DIR="$SCRATCH_ROOT/containers"
+LOG_DIR="$SCRATCH_ROOT/logs/stage6c"
+RESULT_ROOT="$SCRATCH_ROOT/results/stage6c-cosrewrite-qwen3-1.7b-v1/backend_preflight"
+
+# Official vLLM v0.11.0 linux/amd64 manifest, not a mutable tag.
+IMAGE_REPOSITORY="vllm/vllm-openai"
+IMAGE_TAG_LABEL="v0.11.0-x86_64"
+IMAGE_MANIFEST_DIGEST="sha256:d8d39b59e909d2378ac4feeb191f7e7b6f1342477dc66b7c47cec89e9985ad8a"
+IMAGE_REF="docker://$IMAGE_REPOSITORY@$IMAGE_MANIFEST_DIGEST"
+SIF_NAME="vllm-openai-v0.11.0-x86_64.sif"
+SIF_PATH="$CONTAINER_DIR/$SIF_NAME"
+
+EXPECTED_EXECUTION_COMMIT="$(printenv EXPECTED_EXECUTION_COMMIT || true)"
+JOB_LABEL="$(printf '%s' "$PBS_JOBID" | cut -d. -f1)"
+OUT_DIR="$RESULT_ROOT/vllm_container_acquire_$JOB_LABEL"
+RUN_LOG="$OUT_DIR/run.log"
+FAILED_MARKER="$OUT_DIR/FAILED"
+COMPLETE_MARKER="$OUT_DIR/COMPLETE"
+ACTUAL_EXECUTION_COMMIT="UNKNOWN"
+SCRATCH_PARTIAL=""
+
+mkdir -p "$LOG_DIR" "$CONTAINER_DIR" "$OUT_DIR/provenance"
+exec > >(tee -a "$RUN_LOG") 2>&1
+
+failure_handler() {
+    exit_code="$?"
+
+    if [[ -n "$SCRATCH_PARTIAL" && -e "$SCRATCH_PARTIAL" ]]; then
+        rm -f -- "$SCRATCH_PARTIAL"
+    fi
+
+    if [[ ! -e "$COMPLETE_MARKER" ]]; then
+        {
+            echo "status=FAIL"
+            echo "method=$METHOD"
+            echo "job_id=$PBS_JOBID"
+            echo "commit=$ACTUAL_EXECUTION_COMMIT"
+            echo "exit_code=$exit_code"
+            echo "image_ref=$IMAGE_REF"
+            echo "sif_path=$SIF_PATH"
+        } > "$FAILED_MARKER"
+    fi
+
+    exit "$exit_code"
+}
+
+trap failure_handler ERR INT TERM
+
+if [[ -z "$EXPECTED_EXECUTION_COMMIT" ]]; then
+    echo "FAIL: EXPECTED_EXECUTION_COMMIT was not supplied to qsub"
+    false
+fi
+
+cd "$REPO_ROOT"
+ACTUAL_EXECUTION_COMMIT="$(git rev-parse HEAD)"
+
+if [[ "$ACTUAL_EXECUTION_COMMIT" != "$EXPECTED_EXECUTION_COMMIT" ]]; then
+    echo "FAIL: execution commit mismatch"
+    echo "expected=$EXPECTED_EXECUTION_COMMIT"
+    echo "actual=$ACTUAL_EXECUTION_COMMIT"
+    false
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "FAIL: worktree is not clean"
+    git status --short
+    false
+fi
+
+if [[ -e "$SIF_PATH" ]]; then
+    echo "FAIL: final SIF already exists; refusing to overwrite"
+    ls -lh "$SIF_PATH"
+    false
+fi
+
+if [[ -z "$(printenv TMPDIR || true)" || ! -d "$TMPDIR" ]]; then
+    echo "FAIL: PBS local scratch TMPDIR is unavailable"
+    false
+fi
+
+APPTAINER_BIN="$(command -v apptainer)"
+export APPTAINER_CACHEDIR="$TMPDIR/apptainer-cache"
+export APPTAINER_TMPDIR="$TMPDIR/apptainer-tmp"
+STAGED_SIF="$TMPDIR/$SIF_NAME"
+SCRATCH_PARTIAL="$CONTAINER_DIR/.$SIF_NAME.partial.$JOB_LABEL"
+
+mkdir -p "$APPTAINER_CACHEDIR" "$APPTAINER_TMPDIR"
+
+scratch_available_kb="$(df -Pk "$SCRATCH_ROOT" | awk 'NR == 2 {print $4}')"
+local_available_kb="$(df -Pk "$TMPDIR" | awk 'NR == 2 {print $4}')"
+
+# The final SIF is expected to need about 12 GiB. Conversion uses local scratch.
+if (( scratch_available_kb < 20 * 1024 * 1024 )); then
+    echo "FAIL: less than 20 GiB is available in user Scratch"
+    false
+fi
+
+if (( local_available_kb < 45 * 1024 * 1024 )); then
+    echo "FAIL: less than 45 GiB is available in PBS local scratch"
+    false
+fi
+
+{
+    echo "===== JOB ====="
+    echo "PBS_JOBID: $PBS_JOBID"
+    echo "hostname: $(hostname -f 2>/dev/null || hostname)"
+    echo "method: $METHOD"
+    echo "execution_commit: $ACTUAL_EXECUTION_COMMIT"
+    echo "out_dir: $OUT_DIR"
+    echo "image_repository: $IMAGE_REPOSITORY"
+    echo "image_tag_label: $IMAGE_TAG_LABEL"
+    echo "image_manifest_digest: $IMAGE_MANIFEST_DIGEST"
+    echo "image_ref: $IMAGE_REF"
+    echo "sif_path: $SIF_PATH"
+    echo "tmpdir: $TMPDIR"
+    echo "scratch_available_kb_before: $scratch_available_kb"
+    echo "local_available_kb_before: $local_available_kb"
+    echo "timestamp_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo
+    echo "===== HOST APPTAINER ====="
+    "$APPTAINER_BIN" --version
+    echo
+    echo "===== STORAGE BEFORE ====="
+    df -h "$SCRATCH_ROOT" "$TMPDIR"
+} | tee "$OUT_DIR/provenance/preflight.txt"
+
+git show --format=fuller --no-patch HEAD \
+    > "$OUT_DIR/provenance/execution_commit.txt"
+git status --short --branch \
+    > "$OUT_DIR/provenance/git_status.txt"
+cp \
+    "$REPO_ROOT/experiments/stage6c_cosrewrite_v1/pbs/stage6c_2c1_vllm_container_acquire.pbs" \
+    "$OUT_DIR/provenance/"
+
+echo
+echo "===== PULL IMMUTABLE OFFICIAL IMAGE ====="
+"$APPTAINER_BIN" pull --arch amd64 "$STAGED_SIF" "$IMAGE_REF"
+test -s "$STAGED_SIF"
+
+echo
+echo "===== STAGED SIF ====="
+ls -lh "$STAGED_SIF"
+du -h "$STAGED_SIF"
+
+STAGED_SHA256="$(sha256sum "$STAGED_SIF" | awk '{print $1}')"
+echo "$STAGED_SHA256  $SIF_NAME" > "$OUT_DIR/container_image.sha256"
+"$APPTAINER_BIN" inspect --json "$STAGED_SIF" \
+    > "$OUT_DIR/container_inspect.json"
+
+echo
+echo "===== CPU-ONLY CONTAINER METADATA GATE ====="
+"$APPTAINER_BIN" exec --cleanenv "$STAGED_SIF" /bin/bash -lc '
+set -euo pipefail
+echo "container_glibc=$(getconf GNU_LIBC_VERSION)"
+echo "container_python=$(python3 --version 2>&1)"
+python3 - <<"PY"
+import importlib.metadata
+
+for package in ("vllm", "torch", "transformers"):
+    print(
+        "container_{}={}".format(
+            package,
+            importlib.metadata.version(package),
+        )
+    )
+PY
+' | tee "$OUT_DIR/container_versions.txt"
+
+CONTAINER_GLIBC="$("$APPTAINER_BIN" exec --cleanenv "$STAGED_SIF" \
+    getconf GNU_LIBC_VERSION | awk '{print $2}')"
+CONTAINER_VLLM="$("$APPTAINER_BIN" exec --cleanenv "$STAGED_SIF" \
+    python3 -c 'import importlib.metadata; print(importlib.metadata.version("vllm"))')"
+
+if [[ "$(printf '%s\n' 2.29 "$CONTAINER_GLIBC" | sort -V | head -n 1)" != "2.29" ]]; then
+    echo "FAIL: container glibc is older than 2.29: $CONTAINER_GLIBC"
+    false
+fi
+
+if [[ "$CONTAINER_VLLM" != "0.11.0" ]]; then
+    echo "FAIL: expected vLLM 0.11.0, found $CONTAINER_VLLM"
+    false
+fi
+
+"$APPTAINER_BIN" exec --cleanenv "$STAGED_SIF" \
+    vllm serve --help > "$OUT_DIR/vllm_serve_help.txt"
+
+if ! grep -q "openai_gptoss" "$OUT_DIR/vllm_serve_help.txt"; then
+    echo "FAIL: openai_gptoss reasoning parser is absent"
+    false
+fi
+
+echo
+echo "===== COPY VERIFIED SIF TO GLOBAL SCRATCH ====="
+cp --reflink=auto "$STAGED_SIF" "$SCRATCH_PARTIAL"
+sync "$SCRATCH_PARTIAL"
+
+COPIED_SHA256="$(sha256sum "$SCRATCH_PARTIAL" | awk '{print $1}')"
+if [[ "$COPIED_SHA256" != "$STAGED_SHA256" ]]; then
+    echo "FAIL: SIF checksum changed while copying to global Scratch"
+    false
+fi
+
+mv "$SCRATCH_PARTIAL" "$SIF_PATH"
+
+FINAL_SHA256="$(sha256sum "$SIF_PATH" | awk '{print $1}')"
+if [[ "$FINAL_SHA256" != "$STAGED_SHA256" ]]; then
+    echo "FAIL: final SIF checksum mismatch"
+    false
+fi
+
+cat > "$OUT_DIR/container_summary.json" <<EOF
+{
+  "image_repository": "$IMAGE_REPOSITORY",
+  "image_tag_label": "$IMAGE_TAG_LABEL",
+  "manifest_digest": "$IMAGE_MANIFEST_DIGEST",
+  "sif_path": "$SIF_PATH",
+  "sif_sha256": "$FINAL_SHA256",
+  "container_glibc": "$CONTAINER_GLIBC",
+  "vllm_version": "$CONTAINER_VLLM",
+  "gpu_tested": false,
+  "model_loaded": false,
+  "api_tested": false
+}
+EOF
+
+{
+    echo "status=PASS"
+    echo "method=$METHOD"
+    echo "job_id=$PBS_JOBID"
+    echo "commit=$ACTUAL_EXECUTION_COMMIT"
+    echo "image_repository=$IMAGE_REPOSITORY"
+    echo "image_manifest_digest=$IMAGE_MANIFEST_DIGEST"
+    echo "sif_path=$SIF_PATH"
+    echo "sif_sha256=$FINAL_SHA256"
+    echo "container_glibc=$CONTAINER_GLIBC"
+    echo "vllm_version=$CONTAINER_VLLM"
+    echo "gpu_tested=false"
+    echo "model_loaded=false"
+    echo "api_tested=false"
+} > "$COMPLETE_MARKER"
+
+rm -f "$FAILED_MARKER"
+trap - ERR INT TERM
+
+echo
+echo "===== STORAGE AFTER ====="
+ls -lh "$SIF_PATH"
+df -h "$SCRATCH_ROOT"
+echo
+echo "PASS: controlled vLLM Apptainer image acquisition completed"
+echo "out_dir: $OUT_DIR"

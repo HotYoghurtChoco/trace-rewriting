@@ -1,17 +1,19 @@
 #!/bin/bash
-#PBS -N tr-s6c-ossapi-v1
+# Stage 6C.2c containerized GPT-OSS-120B H200 API preflight revision v2.
+#PBS -N tr-s6c-ossapi-v2
 #PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:gpu_model=H200
 #PBS -l walltime=00:45:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-ossapi-v1.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-ossapi-v2.pbs.log
 
-set -euo pipefail
+set -Eeuo pipefail
+umask 077
 
 WORKTREE="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 SCRATCH="/srv/scratch/z5463756/honour"
-ENV="$SCRATCH/envs/trace-rewriting-official"
 RESULT_ROOT="$SCRATCH/results/stage6c-cosrewrite-qwen3-1.7b-v1"
 EXPECTED_EXECUTION_COMMIT="${EXPECTED_EXECUTION_COMMIT:?Pass the committed 6C HEAD with qsub -v}"
+METHOD="stage6c_2c_gptoss_h200_container_api_preflight_v2"
 
 LAUNCHER_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2c_gptoss_h200_api_preflight.pbs"
 MODEL_ID="openai/gpt-oss-120b"
@@ -19,7 +21,19 @@ MODEL_REVISION="b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
 SNAPSHOT_PATH="$SCRATCH/cache/huggingface/hub/models--openai--gpt-oss-120b/snapshots/$MODEL_REVISION"
 SNAPSHOT_JOB_ID="8990062.kman.restech.unsw.edu.au"
 SNAPSHOT_COMMIT="ddebaeea7418ed4b5957706657197314971bbe8c"
+SNAPSHOT_RESULT_DIR="$RESULT_ROOT/backend_preflight/gptoss_snapshot_download_8990062"
+SNAPSHOT_COMPLETE="$SNAPSHOT_RESULT_DIR/COMPLETE"
 SERVED_MODEL_NAME="openai/gpt-oss-120b"
+
+CONTAINER_JOB_ID="8994052.kman.restech.unsw.edu.au"
+CONTAINER_COMMIT="e4eb1b0b37ef4ec317496724d4ef9f68e8ce6fa5"
+CONTAINER_RESULT_DIR="$RESULT_ROOT/backend_preflight/vllm_container_acquire_8994052"
+CONTAINER_COMPLETE="$CONTAINER_RESULT_DIR/COMPLETE"
+IMAGE_MANIFEST_DIGEST="sha256:d8d39b59e909d2378ac4feeb191f7e7b6f1342477dc66b7c47cec89e9985ad8a"
+SIF_PATH="$SCRATCH/containers/vllm-openai-v0.11.0-x86_64.sif"
+EXPECTED_SIF_SHA256="e10fa3b1e526c5f375e2221d0afd1461963f729e0a7867c0d88bee10eb065ec3"
+EXPECTED_CONTAINER_GLIBC="2.35"
+EXPECTED_VLLM_VERSION="0.11.0"
 
 HOST="127.0.0.1"
 PORT="18080"
@@ -32,7 +46,7 @@ REASONING_PARSER="openai_gptoss"
 STARTUP_TIMEOUT_SECONDS="1800"
 
 JOB_ID_LABEL="${PBS_JOBID%%.*}"
-OUT_DIR="$RESULT_ROOT/backend_preflight/gptoss_h200_api_$JOB_ID_LABEL"
+OUT_DIR="$RESULT_ROOT/backend_preflight/gptoss_h200_container_api_$JOB_ID_LABEL"
 SERVER_LOG="$OUT_DIR/vllm_server.log"
 SERVER_COMMAND_FILE="$OUT_DIR/vllm_server_command.txt"
 STATE_FILE="$OUT_DIR/preflight_state.env"
@@ -40,6 +54,9 @@ STATE_FILE="$OUT_DIR/preflight_state.env"
 module purge
 module load python/3.11.3
 cd "$WORKTREE"
+
+HOST_PYTHON="$(command -v python3)"
+APPTAINER_BIN="$(command -v apptainer)"
 
 if [[ "$(git branch --show-current)" != "research/stage6c-cosrewrite" ]]; then
     echo "FAIL: unexpected Stage 6C branch"
@@ -49,8 +66,8 @@ if [[ "$(git rev-parse HEAD)" != "$EXPECTED_EXECUTION_COMMIT" ]]; then
     echo "FAIL: execution commit mismatch"
     exit 1
 fi
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "FAIL: tracked or staged changes exist"
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "FAIL: worktree is not clean"
     git status --short
     exit 1
 fi
@@ -65,7 +82,7 @@ mkdir -p "$OUT_DIR/provenance"
 git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
 git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
 git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
-printf 'model_loaded=false\nhealth_tested=false\nmodel_list_tested=false\napi_tested=false\nparser_real_output_tested=false\n' \
+printf 'container_gpu_tested=false\ncuda_extensions_tested=false\nreasoning_parser_registered=false\nmodel_loaded=false\nhealth_tested=false\nmodel_list_tested=false\napi_tested=false\nparser_real_output_tested=false\n' \
     > "$STATE_FILE"
 
 export HF_HOME="$SCRATCH/cache/huggingface"
@@ -79,6 +96,31 @@ export TOKENIZERS_PARALLELISM=false
 export VLLM_LOGGING_LEVEL=INFO
 export VLLM_NO_USAGE_STATS=1
 export DO_NOT_TRACK=1
+
+mkdir -p "$SCRATCH/cache/vllm" "$SCRATCH/cache/triton/stage6c"
+
+CONTAINER_EXEC=(
+    "$APPTAINER_BIN" exec
+    --nv
+    --cleanenv
+    --bind "$SCRATCH:$SCRATCH"
+    --env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}"
+    --env "HF_HOME=$HF_HOME"
+    --env "HF_HUB_CACHE=$HF_HUB_CACHE"
+    --env "HF_DATASETS_CACHE=$HF_DATASETS_CACHE"
+    --env "HF_HUB_OFFLINE=1"
+    --env "HF_DATASETS_OFFLINE=1"
+    --env "TRANSFORMERS_OFFLINE=1"
+    --env "HF_HUB_DISABLE_TELEMETRY=1"
+    --env "TOKENIZERS_PARALLELISM=false"
+    --env "VLLM_LOGGING_LEVEL=INFO"
+    --env "VLLM_NO_USAGE_STATS=1"
+    --env "DO_NOT_TRACK=1"
+    --env "PYTHONNOUSERSITE=1"
+    --env "XDG_CACHE_HOME=$SCRATCH/cache/vllm"
+    --env "TRITON_CACHE_DIR=$SCRATCH/cache/triton/stage6c"
+    "$SIF_PATH"
+)
 
 set +e
 (
@@ -113,6 +155,7 @@ set +e
     echo "===== JOB ====="
     echo "PBS_JOBID: $PBS_JOBID"
     echo "hostname: $(hostname)"
+    echo "method: $METHOD"
     echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
     echo "out_dir: $OUT_DIR"
     echo "model_id: $MODEL_ID"
@@ -120,13 +163,167 @@ set +e
     echo "snapshot_path: $SNAPSHOT_PATH"
     echo "snapshot_job_id: $SNAPSHOT_JOB_ID"
     echo "snapshot_commit: $SNAPSHOT_COMMIT"
+    echo "container_job_id: $CONTAINER_JOB_ID"
+    echo "container_commit: $CONTAINER_COMMIT"
+    echo "image_manifest_digest: $IMAGE_MANIFEST_DIGEST"
+    echo "sif_path: $SIF_PATH"
+    echo "expected_sif_sha256: $EXPECTED_SIF_SHA256"
     echo "served_model_name: $SERVED_MODEL_NAME"
     echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-UNSET}"
     echo "timestamp_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo
 
+    echo "===== FROZEN CONTAINER VALIDATION ====="
+    "$HOST_PYTHON" - \
+        "$CONTAINER_COMPLETE" \
+        "$CONTAINER_JOB_ID" \
+        "$CONTAINER_COMMIT" \
+        "$IMAGE_MANIFEST_DIGEST" \
+        "$SIF_PATH" \
+        "$EXPECTED_SIF_SHA256" \
+        "$EXPECTED_CONTAINER_GLIBC" \
+        "$EXPECTED_VLLM_VERSION" \
+        "$OUT_DIR/container_provenance_validation.json" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    complete_path_raw,
+    expected_job_id,
+    expected_commit,
+    expected_digest,
+    sif_path_raw,
+    expected_sif_sha256,
+    expected_glibc,
+    expected_vllm,
+    output_path_raw,
+) = sys.argv[1:]
+
+complete_path = pathlib.Path(complete_path_raw)
+sif_path = pathlib.Path(sif_path_raw)
+output_path = pathlib.Path(output_path_raw)
+
+if not complete_path.is_file():
+    raise RuntimeError(f"Container COMPLETE marker is absent: {complete_path}")
+if not sif_path.is_file():
+    raise RuntimeError(f"Frozen SIF is absent: {sif_path}")
+
+fields = {}
+for line in complete_path.read_text().splitlines():
+    if "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    fields[key] = value
+
+expected = {
+    "status": "PASS",
+    "method": "stage6c_2c1_vllm_container_acquire_v3",
+    "job_id": expected_job_id,
+    "commit": expected_commit,
+    "image_manifest_digest": expected_digest,
+    "sif_path": str(sif_path),
+    "sif_sha256": expected_sif_sha256,
+    "container_glibc": expected_glibc,
+    "vllm_version": expected_vllm,
+    "gpu_runtime_gate_deferred": "true",
+    "gpu_tested": "false",
+    "model_loaded": "false",
+    "api_tested": "false",
+}
+
+mismatches = {
+    key: {"expected": value, "found": fields.get(key)}
+    for key, value in expected.items()
+    if fields.get(key) != value
+}
+if mismatches:
+    raise RuntimeError(f"Container provenance mismatch: {mismatches}")
+
+summary = {
+    "complete_marker": str(complete_path),
+    "validated_fields": expected,
+}
+output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+print("container_provenance_validation=PASS")
+PY
+
+    actual_sif_sha256="$(sha256sum "$SIF_PATH" | awk '{print $1}')"
+    echo "actual_sif_sha256=$actual_sif_sha256"
+    if [[ "$actual_sif_sha256" != "$EXPECTED_SIF_SHA256" ]]; then
+        echo "FAIL: frozen SIF SHA256 mismatch"
+        exit 1
+    fi
+    echo "sif_sha256_validation=PASS"
+    echo
+
+    echo "===== FROZEN SNAPSHOT PROVENANCE ====="
+    "$HOST_PYTHON" - \
+        "$SNAPSHOT_COMPLETE" \
+        "$SNAPSHOT_JOB_ID" \
+        "$SNAPSHOT_COMMIT" \
+        "$MODEL_ID" \
+        "$MODEL_REVISION" \
+        "$SNAPSHOT_PATH" \
+        "$OUT_DIR/snapshot_provenance_validation.json" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    complete_path_raw,
+    expected_job_id,
+    expected_commit,
+    expected_model_id,
+    expected_revision,
+    expected_snapshot_path,
+    output_path_raw,
+) = sys.argv[1:]
+
+complete_path = pathlib.Path(complete_path_raw)
+output_path = pathlib.Path(output_path_raw)
+if not complete_path.is_file():
+    raise RuntimeError(f"Snapshot COMPLETE marker is absent: {complete_path}")
+
+fields = {}
+for line in complete_path.read_text().splitlines():
+    if "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    fields[key] = value
+
+expected = {
+    "status": "PASS",
+    "method": "stage6c_2b_gptoss_snapshot_download_v1",
+    "job_id": expected_job_id,
+    "commit": expected_commit,
+    "model_id": expected_model_id,
+    "model_revision": expected_revision,
+    "selected_bytes": "65276859410",
+    "model_loaded": "false",
+    "api_tested": "false",
+}
+
+mismatches = {
+    key: {"expected": value, "found": fields.get(key)}
+    for key, value in expected.items()
+    if fields.get(key) != value
+}
+if mismatches:
+    raise RuntimeError(f"Snapshot provenance mismatch: {mismatches}")
+
+summary = {
+    "complete_marker": str(complete_path),
+    "expected_snapshot_path": expected_snapshot_path,
+    "validated_fields": expected,
+}
+output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+print("snapshot_provenance_validation=PASS")
+PY
+    echo
+
     echo "===== SNAPSHOT VALIDATION ====="
-    "$ENV/bin/python" - "$SNAPSHOT_PATH" "$MODEL_REVISION" "$OUT_DIR/snapshot_validation.json" <<'PY'
+    "$HOST_PYTHON" - "$SNAPSHOT_PATH" "$MODEL_REVISION" "$OUT_DIR/snapshot_validation.json" <<'PY'
 import json
 import pathlib
 import sys
@@ -192,47 +389,100 @@ print("snapshot_validation=PASS")
 PY
     echo
 
-    echo "===== RUNTIME ====="
-    "$ENV/bin/python" - <<'PY'
-import importlib.metadata
-import platform
-import sys
-
-import torch
-
-print(f"python_executable={sys.executable}")
-print(f"python_version={platform.python_version()}")
-for package in ("torch", "vllm", "transformers", "openai"):
-    print(f"{package}_version={importlib.metadata.version(package)}")
-print(f"torch_compiled_cuda={torch.version.cuda}")
-print(f"cuda_available={torch.cuda.is_available()}")
-
-if not torch.cuda.is_available():
-    raise RuntimeError("CUDA is not available")
-if torch.cuda.device_count() != 1:
-    raise RuntimeError(f"Expected one visible GPU, found {torch.cuda.device_count()}")
-
-properties = torch.cuda.get_device_properties(0)
-total_memory_gib = properties.total_memory / (1024 ** 3)
-print(f"device_name={properties.name}")
-print(f"device_total_memory_GiB={total_memory_gib:.3f}")
-print(f"device_compute_capability={properties.major}.{properties.minor}")
-
-if "H200" not in properties.name.upper():
-    raise RuntimeError(f"Expected an H200, found {properties.name}")
-if total_memory_gib < 100:
-    raise RuntimeError(f"Expected at least 100 GiB VRAM, found {total_memory_gib:.3f}")
-PY
-
+    echo "===== HOST GPU BEFORE CONTAINER ====="
     nvidia-smi > "$OUT_DIR/nvidia_smi_before_server.txt"
     nvidia-smi \
         --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
         --format=csv,noheader \
         > "$OUT_DIR/gpu_memory_before_server.csv"
+    cat "$OUT_DIR/gpu_memory_before_server.csv"
+    echo
+
+    echo "===== CONTAINER H200 CUDA MOE AND PARSER GATE ====="
+    "${CONTAINER_EXEC[@]}" python3 - \
+        "$OUT_DIR/container_gpu_runtime.json" \
+        "$REASONING_PARSER" <<'PY'
+import importlib
+import importlib.metadata
+import json
+import pathlib
+import platform
+import sys
+
+import torch
+
+output_path = pathlib.Path(sys.argv[1])
+reasoning_parser_name = sys.argv[2]
+
+versions = {
+    package: importlib.metadata.version(package)
+    for package in ("torch", "vllm", "transformers")
+}
+if versions["vllm"] != "0.11.0":
+    raise RuntimeError(f"Expected vLLM 0.11.0, found {versions['vllm']}")
+
+if not torch.cuda.is_available():
+    raise RuntimeError("CUDA is not available inside the Apptainer container")
+if torch.cuda.device_count() != 1:
+    raise RuntimeError(
+        f"Expected one visible container GPU, found {torch.cuda.device_count()}"
+    )
+
+properties = torch.cuda.get_device_properties(0)
+total_memory_gib = properties.total_memory / (1024 ** 3)
+if "H200" not in properties.name.upper():
+    raise RuntimeError(f"Expected an H200, found {properties.name}")
+if total_memory_gib < 100:
+    raise RuntimeError(
+        f"Expected at least 100 GiB VRAM, found {total_memory_gib:.3f}"
+    )
+
+extension_modules = ("vllm._C", "vllm._moe_C")
+extension_paths = {}
+for module_name in extension_modules:
+    module = importlib.import_module(module_name)
+    extension_paths[module_name] = getattr(module, "__file__", None)
+
+if not hasattr(torch.ops._moe_C, "topk_softmax"):
+    raise RuntimeError("torch.ops._moe_C.topk_softmax is not registered")
+
+importlib.import_module("vllm.reasoning.gptoss_reasoning_parser")
+from vllm.reasoning import ReasoningParserManager
+
+parser_class = ReasoningParserManager.get_reasoning_parser(reasoning_parser_name)
+if parser_class.__name__ != "GptOssReasoningParser":
+    raise RuntimeError(
+        f"Unexpected reasoning parser class: {parser_class.__name__}"
+    )
+
+summary = {
+    "cuda_available": True,
+    "device_compute_capability": (
+        f"{properties.major}.{properties.minor}"
+    ),
+    "device_count": torch.cuda.device_count(),
+    "device_name": properties.name,
+    "device_total_memory_gib": round(total_memory_gib, 3),
+    "extension_paths": extension_paths,
+    "python_version": platform.python_version(),
+    "reasoning_parser_class": parser_class.__name__,
+    "reasoning_parser_name": reasoning_parser_name,
+    "topk_softmax_registered": True,
+    "torch_compiled_cuda": torch.version.cuda,
+    "versions": versions,
+}
+output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
+for key, value in summary.items():
+    print(f"{key}={value}")
+print("container_gpu_runtime_validation=PASS")
+PY
+    printf 'container_gpu_tested=true\ncuda_extensions_tested=true\nreasoning_parser_registered=true\nmodel_loaded=false\nhealth_tested=false\nmodel_list_tested=false\napi_tested=false\nparser_real_output_tested=false\n' \
+        > "$STATE_FILE"
     echo
 
     echo "===== PORT CHECK ====="
-    "$ENV/bin/python" - "$HOST" "$PORT" <<'PY'
+    "$HOST_PYTHON" - "$HOST" "$PORT" <<'PY'
 import socket
 import sys
 
@@ -247,9 +497,10 @@ print(f"port_available={host}:{port}")
 PY
     echo
 
-    echo "===== START VLLM ====="
+    echo "===== START CONTAINERIZED VLLM ====="
     server_command=(
-        "$ENV/bin/vllm" serve "$SNAPSHOT_PATH"
+        "${CONTAINER_EXEC[@]}"
+        vllm serve "$SNAPSHOT_PATH"
         --served-model-name "$SERVED_MODEL_NAME"
         --host "$HOST"
         --port "$PORT"
@@ -284,7 +535,7 @@ PY
             exit 1
         fi
 
-        if "$ENV/bin/python" - "$HOST" "$PORT" >/dev/null 2>&1 <<'PY'
+        if "$HOST_PYTHON" - "$HOST" "$PORT" >/dev/null 2>&1 <<'PY'
 import sys
 import urllib.request
 
@@ -307,7 +558,7 @@ PY
         exit 1
     fi
     echo "health=PASS"
-    printf 'model_loaded=true\nhealth_tested=true\nmodel_list_tested=false\napi_tested=false\nparser_real_output_tested=false\n' \
+    printf 'container_gpu_tested=true\ncuda_extensions_tested=true\nreasoning_parser_registered=true\nmodel_loaded=true\nhealth_tested=true\nmodel_list_tested=false\napi_tested=false\nparser_real_output_tested=false\n' \
         > "$STATE_FILE"
     echo
 
@@ -318,7 +569,7 @@ PY
         > "$OUT_DIR/gpu_memory_server_ready.csv"
 
     echo "===== OPENAI-COMPATIBLE API ====="
-    "$ENV/bin/python" - \
+    "$HOST_PYTHON" - \
         "$HOST" "$PORT" "$SERVED_MODEL_NAME" \
         "$OUT_DIR/models_response.json" \
         "$OUT_DIR/chat_completion_response.json" \
@@ -327,8 +578,7 @@ import json
 import pathlib
 import re
 import sys
-
-from openai import OpenAI
+import urllib.request
 
 host = sys.argv[1]
 port = sys.argv[2]
@@ -336,16 +586,13 @@ served_model_name = sys.argv[3]
 models_output = pathlib.Path(sys.argv[4])
 chat_output = pathlib.Path(sys.argv[5])
 summary_output = pathlib.Path(sys.argv[6])
+api_base_url = f"http://{host}:{port}/v1"
 
-client = OpenAI(
-    base_url=f"http://{host}:{port}/v1",
-    api_key="EMPTY",
-    timeout=300.0,
-    max_retries=0,
-)
+with urllib.request.urlopen(f"{api_base_url}/models", timeout=30) as response:
+    if response.status != 200:
+        raise RuntimeError(f"Unexpected /v1/models status: {response.status}")
+    models_payload = json.loads(response.read().decode("utf-8"))
 
-models_response = client.models.list()
-models_payload = models_response.model_dump(mode="json")
 models_output.write_text(json.dumps(models_payload, indent=2, sort_keys=True) + "\n")
 model_ids = [item.get("id") for item in models_payload.get("data", [])]
 if served_model_name not in model_ids:
@@ -353,9 +600,9 @@ if served_model_name not in model_ids:
         f"Served model {served_model_name!r} absent from /v1/models: {model_ids}"
     )
 
-completion = client.chat.completions.create(
-    model=served_model_name,
-    messages=[
+request_payload = {
+    "model": served_model_name,
+    "messages": [
         {
             "role": "system",
             "content": "Answer the arithmetic question accurately and concisely.",
@@ -365,11 +612,26 @@ completion = client.chat.completions.create(
             "content": "What is 12 + 7? Give the final answer as one integer.",
         },
     ],
-    reasoning_effort="low",
-    temperature=0.0,
-    max_tokens=512,
+    "reasoning_effort": "low",
+    "temperature": 0.0,
+    "max_tokens": 512,
+}
+request = urllib.request.Request(
+    f"{api_base_url}/chat/completions",
+    data=json.dumps(request_payload).encode("utf-8"),
+    headers={
+        "Authorization": "Bearer EMPTY",
+        "Content-Type": "application/json",
+    },
+    method="POST",
 )
-completion_payload = completion.model_dump(mode="json")
+with urllib.request.urlopen(request, timeout=300) as response:
+    if response.status != 200:
+        raise RuntimeError(
+            f"Unexpected /v1/chat/completions status: {response.status}"
+        )
+    completion_payload = json.loads(response.read().decode("utf-8"))
+
 chat_output.write_text(json.dumps(completion_payload, indent=2, sort_keys=True) + "\n")
 
 choices = completion_payload.get("choices") or []
@@ -380,6 +642,10 @@ choice = choices[0]
 message = choice.get("message") or {}
 content = message.get("content")
 reasoning_content = message.get("reasoning_content")
+reasoning_field = "reasoning_content"
+if not isinstance(reasoning_content, str) or not reasoning_content.strip():
+    reasoning_content = message.get("reasoning")
+    reasoning_field = "reasoning"
 finish_reason = choice.get("finish_reason")
 
 if not isinstance(content, str) or not content.strip():
@@ -403,7 +669,7 @@ for field_name, value in (
 
 usage = completion_payload.get("usage") or {}
 summary = {
-    "api_base_url": f"http://{host}:{port}/v1",
+    "api_base_url": api_base_url,
     "chat_completions": "PASS",
     "content_nonempty": True,
     "content_preview": content[:300],
@@ -411,6 +677,7 @@ summary = {
     "model_list": "PASS",
     "prompt_tokens": usage.get("prompt_tokens"),
     "reasoning_content_present": True,
+    "reasoning_field": reasoning_field,
     "reasoning_preview": reasoning_content[:300],
     "served_model_name": served_model_name,
     "total_tokens": usage.get("total_tokens"),
@@ -421,7 +688,7 @@ for key, value in summary.items():
     print(f"{key}={value}")
 print("api_validation=PASS")
 PY
-    printf 'model_loaded=true\nhealth_tested=true\nmodel_list_tested=true\napi_tested=true\nparser_real_output_tested=true\n' \
+    printf 'container_gpu_tested=true\ncuda_extensions_tested=true\nreasoning_parser_registered=true\nmodel_loaded=true\nhealth_tested=true\nmodel_list_tested=true\napi_tested=true\nparser_real_output_tested=true\n' \
         > "$STATE_FILE"
     echo
 
@@ -441,6 +708,12 @@ PY
     server_pid=""
     trap - EXIT INT TERM
 
+    nvidia-smi > "$OUT_DIR/nvidia_smi_after_server_stop.txt"
+    nvidia-smi \
+        --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
+        --format=csv,noheader \
+        > "$OUT_DIR/gpu_memory_after_server_stop.csv"
+
     echo "PASS: GPT-OSS-120B loaded on one H200 and served a parsed Chat Completions response"
 ) 2>&1 | tee "$OUT_DIR/run.log"
 pipeline_status=("${PIPESTATUS[@]}")
@@ -449,9 +722,11 @@ set -e
 preflight_status="${pipeline_status[0]}"
 tee_status="${pipeline_status[1]}"
 if (( preflight_status != 0 || tee_status != 0 )); then
-    printf 'status=FAIL\nmethod=stage6c_2c_gptoss_h200_api_preflight_v1\njob_id=%s\ncommit=%s\nmodel_id=%s\nmodel_revision=%s\npreflight_exit_status=%s\ntee_exit_status=%s\n' \
-        "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
+    printf 'status=FAIL\nmethod=%s\njob_id=%s\ncommit=%s\nmodel_id=%s\nmodel_revision=%s\ncontainer_job_id=%s\ncontainer_commit=%s\nsif_path=%s\nsif_sha256=%s\npreflight_exit_status=%s\ntee_exit_status=%s\n' \
+        "$METHOD" "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
         "$MODEL_ID" "$MODEL_REVISION" \
+        "$CONTAINER_JOB_ID" "$CONTAINER_COMMIT" \
+        "$SIF_PATH" "$EXPECTED_SIF_SHA256" \
         "$preflight_status" "$tee_status" \
         > "$OUT_DIR/FAILED"
     cat "$STATE_FILE" >> "$OUT_DIR/FAILED"
@@ -461,10 +736,12 @@ if (( preflight_status != 0 || tee_status != 0 )); then
     exit 1
 fi
 
-printf 'status=PASS\nmethod=stage6c_2c_gptoss_h200_api_preflight_v1\njob_id=%s\ncommit=%s\nmodel_id=%s\nmodel_revision=%s\nsnapshot_job_id=%s\nsnapshot_commit=%s\nserved_model_name=%s\nquantization=%s\ndtype=%s\nmax_model_len=%s\ngpu_memory_utilization=%s\nreasoning_parser=%s\nmodel_loaded=true\nhealth_tested=true\nmodel_list_tested=true\napi_tested=true\nparser_real_output_tested=true\n' \
-    "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
+printf 'status=PASS\nmethod=%s\njob_id=%s\ncommit=%s\nmodel_id=%s\nmodel_revision=%s\nsnapshot_job_id=%s\nsnapshot_commit=%s\ncontainer_job_id=%s\ncontainer_commit=%s\nimage_manifest_digest=%s\nsif_path=%s\nsif_sha256=%s\nserved_model_name=%s\nquantization=%s\ndtype=%s\nmax_model_len=%s\ngpu_memory_utilization=%s\nreasoning_parser=%s\ncontainer_gpu_tested=true\ncuda_extensions_tested=true\nreasoning_parser_registered=true\nmodel_loaded=true\nhealth_tested=true\nmodel_list_tested=true\napi_tested=true\nparser_real_output_tested=true\n' \
+    "$METHOD" "$PBS_JOBID" "$EXPECTED_EXECUTION_COMMIT" \
     "$MODEL_ID" "$MODEL_REVISION" \
     "$SNAPSHOT_JOB_ID" "$SNAPSHOT_COMMIT" \
+    "$CONTAINER_JOB_ID" "$CONTAINER_COMMIT" \
+    "$IMAGE_MANIFEST_DIGEST" "$SIF_PATH" "$EXPECTED_SIF_SHA256" \
     "$SERVED_MODEL_NAME" "$QUANTIZATION" "$DTYPE" \
     "$MAX_MODEL_LEN" "$GPU_MEMORY_UTILIZATION" "$REASONING_PARSER" \
     > "$OUT_DIR/COMPLETE"

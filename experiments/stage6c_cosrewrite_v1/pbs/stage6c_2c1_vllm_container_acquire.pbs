@@ -1,15 +1,15 @@
 #!/bin/bash
-# Stage 6C.2c.1 container acquisition revision v2 (32 GB PBS / 8 GB squashfs cache).
-#PBS -N tr-s6c-vllm-img-v2
+# Stage 6C.2c.1 container acquisition revision v3 (CPU-safe metadata gate).
+#PBS -N tr-s6c-vllm-img-v3
 #PBS -l select=1:ncpus=4:mem=32gb
 #PBS -l walltime=02:00:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-vllm-img-v2.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-vllm-img-v3.pbs.log
 
 set -Eeuo pipefail
 umask 077
 
-METHOD="stage6c_2c1_vllm_container_acquire_v2"
+METHOD="stage6c_2c1_vllm_container_acquire_v3"
 REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 SCRATCH_ROOT="/srv/scratch/z5463756/honour"
 CONTAINER_DIR="$SCRATCH_ROOT/containers"
@@ -201,13 +201,12 @@ if [[ "$CONTAINER_VLLM" != "0.11.0" ]]; then
     false
 fi
 
-"$APPTAINER_BIN" exec --cleanenv "$STAGED_SIF" \
-    vllm serve --help > "$OUT_DIR/vllm_serve_help.txt"
-
-if ! grep -q "openai_gptoss" "$OUT_DIR/vllm_serve_help.txt"; then
-    echo "FAIL: openai_gptoss reasoning parser is absent"
-    false
-fi
+cat > "$OUT_DIR/runtime_gate_deferred.txt" <<'EOF'
+gpu_runtime_gate=DEFERRED
+reason=CPU-only acquisition job cannot initialize the vLLM CUDA device backend
+next_gate=Stage 6C.2c H200 container API preflight
+required_checks=vllm CLI, CUDA extensions, openai_gptoss parser, model load, health, API response
+EOF
 
 echo
 echo "===== COPY VERIFIED SIF TO GLOBAL SCRATCH ====="
@@ -237,6 +236,7 @@ cat > "$OUT_DIR/container_summary.json" <<EOF
   "sif_sha256": "$FINAL_SHA256",
   "container_glibc": "$CONTAINER_GLIBC",
   "vllm_version": "$CONTAINER_VLLM",
+  "gpu_runtime_gate_deferred": true,
   "gpu_tested": false,
   "model_loaded": false,
   "api_tested": false
@@ -254,6 +254,7 @@ EOF
     echo "sif_sha256=$FINAL_SHA256"
     echo "container_glibc=$CONTAINER_GLIBC"
     echo "vllm_version=$CONTAINER_VLLM"
+    echo "gpu_runtime_gate_deferred=true"
     echo "gpu_tested=false"
     echo "model_loaded=false"
     echo "api_tested=false"

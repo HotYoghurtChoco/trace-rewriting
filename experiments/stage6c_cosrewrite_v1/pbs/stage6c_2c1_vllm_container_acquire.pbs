@@ -1,14 +1,15 @@
 #!/bin/bash
-#PBS -N tr-s6c-vllm-img-v1
-#PBS -l select=1:ncpus=4:mem=16gb
+# Stage 6C.2c.1 container acquisition revision v2 (32 GB PBS / 8 GB squashfs cache).
+#PBS -N tr-s6c-vllm-img-v2
+#PBS -l select=1:ncpus=4:mem=32gb
 #PBS -l walltime=02:00:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-vllm-img-v1.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-vllm-img-v2.pbs.log
 
 set -Eeuo pipefail
 umask 077
 
-METHOD="stage6c_2c1_vllm_container_acquire_v1"
+METHOD="stage6c_2c1_vllm_container_acquire_v2"
 REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 SCRATCH_ROOT="/srv/scratch/z5463756/honour"
 CONTAINER_DIR="$SCRATCH_ROOT/containers"
@@ -22,6 +23,7 @@ IMAGE_MANIFEST_DIGEST="sha256:d8d39b59e909d2378ac4feeb191f7e7b6f1342477dc66b7c47
 IMAGE_REF="docker://$IMAGE_REPOSITORY@$IMAGE_MANIFEST_DIGEST"
 SIF_NAME="vllm-openai-v0.11.0-x86_64.sif"
 SIF_PATH="$CONTAINER_DIR/$SIF_NAME"
+MKSQUASHFS_ARGS="-processors 2 -mem 8G"
 
 EXPECTED_EXECUTION_COMMIT="$(printenv EXPECTED_EXECUTION_COMMIT || true)"
 JOB_LABEL="$(printf '%s' "$PBS_JOBID" | cut -d. -f1)"
@@ -125,6 +127,7 @@ fi
     echo "image_manifest_digest: $IMAGE_MANIFEST_DIGEST"
     echo "image_ref: $IMAGE_REF"
     echo "sif_path: $SIF_PATH"
+    echo "mksquashfs_args: $MKSQUASHFS_ARGS"
     echo "tmpdir: $TMPDIR"
     echo "scratch_available_kb_before: $scratch_available_kb"
     echo "local_available_kb_before: $local_available_kb"
@@ -146,8 +149,12 @@ cp \
     "$OUT_DIR/provenance/"
 
 echo
-echo "===== PULL IMMUTABLE OFFICIAL IMAGE ====="
-"$APPTAINER_BIN" pull --arch amd64 "$STAGED_SIF" "$IMAGE_REF"
+echo "===== BUILD IMMUTABLE OFFICIAL IMAGE ====="
+"$APPTAINER_BIN" build \
+    --arch amd64 \
+    --mksquashfs-args "$MKSQUASHFS_ARGS" \
+    "$STAGED_SIF" \
+    "$IMAGE_REF"
 test -s "$STAGED_SIF"
 
 echo

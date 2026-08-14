@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N tr-s6c-loop-v1
+#PBS -N tr-s6c-loop-v2
 #PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:gpu_model=H200
 #PBS -l walltime=03:00:00
 #PBS -j oe
@@ -8,7 +8,7 @@
 set -euo pipefail
 umask 077
 
-METHOD="stage6c_2d_single_problem_closed_loop_v1"
+METHOD="stage6c_2d_single_problem_closed_loop_v2"
 REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 DRIVER_REL="experiments/stage6c_cosrewrite_v1/run_single_problem_closed_loop.py"
 PBS_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2d_single_problem_closed_loop.pbs"
@@ -122,7 +122,12 @@ done
 
 ACTUAL_SIF_SHA256="$(sha256sum "$SIF" | awk '{print $1}')"
 [[ "$ACTUAL_SIF_SHA256" == "$EXPECTED_SIF_SHA256" ]]
-[[ "$(find "$SNAPSHOT" -maxdepth 1 -type f -name 'model-*-of-*.safetensors' | wc -l)" -eq 15 ]]
+SNAPSHOT_WEIGHT_COUNT="$(find -L "$SNAPSHOT" -maxdepth 1 -type f -name 'model-*-of-*.safetensors' | wc -l)"
+if [[ "$SNAPSHOT_WEIGHT_COUNT" -ne 15 ]]; then
+    echo "FAIL: expected 15 dereferenced snapshot weight files, found $SNAPSHOT_WEIGHT_COUNT" >&2
+    exit 1
+fi
+echo "snapshot_weight_count=$SNAPSHOT_WEIGHT_COUNT"
 test ! -e "$SNAPSHOT/metal"
 test ! -e "$SNAPSHOT/original"
 

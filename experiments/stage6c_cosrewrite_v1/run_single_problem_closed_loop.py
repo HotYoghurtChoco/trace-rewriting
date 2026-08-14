@@ -45,7 +45,7 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer
 from optimize.score_candidates import _load_training_tokenizer
 
 
-METHOD = "stage6c_2d_single_problem_closed_loop_v1"
+METHOD = "stage6c_2d_single_problem_closed_loop_v2"
 CLAIM_BOUNDARY = (
     "Engineering preflight only: no executable formal-protocol lock, no "
     "SelectionOnly comparison, no method-effect claim, and no student/AF result."

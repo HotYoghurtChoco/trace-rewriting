@@ -1,0 +1,317 @@
+#!/bin/bash
+#PBS -N tr-s6c-loop-v1
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:gpu_model=H200
+#PBS -l walltime=03:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-loop-v1.pbs.log
+
+set -euo pipefail
+umask 077
+
+METHOD="stage6c_2d_single_problem_closed_loop_v1"
+REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+DRIVER_REL="experiments/stage6c_cosrewrite_v1/run_single_problem_closed_loop.py"
+PBS_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2d_single_problem_closed_loop.pbs"
+ENV_ROOT="/srv/scratch/z5463756/honour/envs/trace-rewriting-official"
+HONOUR_ROOT="/srv/scratch/z5463756/honour"
+RESULT_ROOT="$HONOUR_ROOT/results/stage6c-cosrewrite-qwen3-1.7b-v1/backend_preflight"
+LOG_ROOT="$HONOUR_ROOT/logs/stage6c"
+SIF="$HONOUR_ROOT/containers/vllm-openai-v0.11.0-x86_64.sif"
+EXPECTED_SIF_SHA256="e10fa3b1e526c5f375e2221d0afd1461963f729e0a7867c0d88bee10eb065ec3"
+SNAPSHOT="$HONOUR_ROOT/cache/huggingface/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+MODEL_ID="openai/gpt-oss-120b"
+PORT=18080
+SNAPSHOT_RESULT="$RESULT_ROOT/gptoss_snapshot_download_8990062"
+CONTAINER_RESULT="$RESULT_ROOT/vllm_container_acquire_8994052"
+API_PREFLIGHT_RESULT="$RESULT_ROOT/gptoss_h200_container_api_8995484"
+
+: "${PBS_JOBID:?PBS_JOBID is required}"
+: "${EXPECTED_EXECUTION_COMMIT:?Pass EXPECTED_EXECUTION_COMMIT with qsub -v}"
+
+JOB_NUMBER="${PBS_JOBID%%.*}"
+OUT_DIR="$RESULT_ROOT/gptoss_qwen_single_problem_loop_${JOB_NUMBER}"
+SERVER_LOG="$OUT_DIR/vllm_server.log"
+SERVER_PID=""
+SUCCESS=0
+
+mkdir -p "$LOG_ROOT"
+if [[ -e "$OUT_DIR" ]]; then
+    echo "STOP: output directory already exists: $OUT_DIR" >&2
+    exit 1
+fi
+mkdir -p "$OUT_DIR/provenance"
+exec > >(tee "$OUT_DIR/run.log") 2>&1
+
+write_failed_marker() {
+    local exit_code="$1"
+    if [[ "$SUCCESS" -ne 1 && ! -e "$OUT_DIR/FAILED" ]]; then
+        {
+            echo "status=FAIL"
+            echo "method=$METHOD"
+            echo "job_id=$PBS_JOBID"
+            echo "commit=$EXPECTED_EXECUTION_COMMIT"
+            echo "exit_code=$exit_code"
+            echo "complete_present=$([[ -e "$OUT_DIR/COMPLETE" ]] && echo true || echo false)"
+        } > "$OUT_DIR/FAILED.partial"
+        mv "$OUT_DIR/FAILED.partial" "$OUT_DIR/FAILED"
+    fi
+}
+
+stop_server() {
+    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM -- "-$SERVER_PID" 2>/dev/null || kill -TERM "$SERVER_PID" 2>/dev/null || true
+        for _ in $(seq 1 30); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 2
+        done
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL -- "-$SERVER_PID" 2>/dev/null || kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+    SERVER_PID=""
+}
+
+cleanup() {
+    local exit_code="$?"
+    trap - EXIT INT TERM
+    stop_server
+    nvidia-smi \
+        --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
+        --format=csv,noheader \
+        > "$OUT_DIR/gpu_memory_after_server_stop.csv" 2>/dev/null || true
+    write_failed_marker "$exit_code"
+    exit "$exit_code"
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+cd "$REPO_ROOT"
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "method: $METHOD"
+echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
+echo "out_dir: $OUT_DIR"
+echo "timestamp_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+test -x "$ENV_ROOT/bin/python"
+test -f "$DRIVER_REL"
+test -f "$PBS_REL"
+test -f "$SIF"
+test -d "$SNAPSHOT"
+
+ACTUAL_HEAD="$(git rev-parse HEAD)"
+REMOTE_HEAD="$(git rev-parse origin/research/stage6c-cosrewrite)"
+[[ "$ACTUAL_HEAD" == "$EXPECTED_EXECUTION_COMMIT" ]]
+[[ "$REMOTE_HEAD" == "$EXPECTED_EXECUTION_COMMIT" ]]
+[[ -z "$(git status --porcelain)" ]]
+git cat-file -e "$EXPECTED_EXECUTION_COMMIT:$DRIVER_REL"
+git cat-file -e "$EXPECTED_EXECUTION_COMMIT:$PBS_REL"
+
+for dependency in "$SNAPSHOT_RESULT" "$CONTAINER_RESULT" "$API_PREFLIGHT_RESULT"; do
+    test -f "$dependency/COMPLETE"
+    test ! -e "$dependency/FAILED"
+    grep -Fxq "status=PASS" "$dependency/COMPLETE"
+done
+
+ACTUAL_SIF_SHA256="$(sha256sum "$SIF" | awk '{print $1}')"
+[[ "$ACTUAL_SIF_SHA256" == "$EXPECTED_SIF_SHA256" ]]
+[[ "$(find "$SNAPSHOT" -maxdepth 1 -type f -name 'model-*-of-*.safetensors' | wc -l)" -eq 15 ]]
+test ! -e "$SNAPSHOT/metal"
+test ! -e "$SNAPSHOT/original"
+
+cp "$DRIVER_REL" "$OUT_DIR/provenance/"
+cp "$PBS_REL" "$OUT_DIR/provenance/"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show --format=fuller --no-patch "$EXPECTED_EXECUTION_COMMIT" > "$OUT_DIR/provenance/execution_commit.txt"
+sha256sum \
+    "$DRIVER_REL" \
+    "$PBS_REL" \
+    "$SIF" \
+    "$SNAPSHOT/model.safetensors.index.json" \
+    > "$OUT_DIR/provenance/runtime_sha256.txt"
+
+"$ENV_ROOT/bin/python" - <<'PY' > "$OUT_DIR/provenance/host_runtime.txt"
+import platform
+import datasets
+import math_verify
+import peft
+import torch
+import transformers
+
+print("python={}".format(platform.python_version()))
+print("torch={}".format(torch.__version__))
+print("torch_compiled_cuda={}".format(torch.version.cuda))
+print("transformers={}".format(transformers.__version__))
+print("peft={}".format(peft.__version__))
+print("datasets={}".format(datasets.__version__))
+print("math_verify={}".format(getattr(math_verify, "__version__", "unknown")))
+print("cuda_available={}".format(torch.cuda.is_available()))
+print("bf16_supported={}".format(torch.cuda.is_bf16_supported()))
+if torch.cuda.is_available():
+    print("device_name={}".format(torch.cuda.get_device_name(0)))
+PY
+
+grep -Fxq "cuda_available=True" "$OUT_DIR/provenance/host_runtime.txt"
+grep -Fxq "bf16_supported=True" "$OUT_DIR/provenance/host_runtime.txt"
+grep -Fq "device_name=NVIDIA H200" "$OUT_DIR/provenance/host_runtime.txt"
+
+nvidia-smi \
+    --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
+    --format=csv,noheader \
+    > "$OUT_DIR/gpu_memory_before_server.csv"
+
+export CUDA_VISIBLE_DEVICES=0
+export HF_HOME="$HONOUR_ROOT/cache/huggingface"
+export HF_HUB_CACHE="$HONOUR_ROOT/cache/huggingface/hub"
+export HF_DATASETS_CACHE="$HONOUR_ROOT/cache/huggingface/datasets"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+export TOKENIZERS_PARALLELISM=false
+export PYTHONNOUSERSITE=1
+export PYTHONHASHSEED=888
+export OMP_NUM_THREADS=8
+export XDG_CACHE_HOME="$HONOUR_ROOT/cache/vllm"
+export TRITON_CACHE_DIR="$HONOUR_ROOT/cache/triton/stage6c"
+mkdir -p "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR"
+ulimit -n 65535 2>/dev/null || true
+
+CONTAINER_EXEC=(
+    /bin/apptainer exec
+    --nv
+    --cleanenv
+    --bind "$HONOUR_ROOT:$HONOUR_ROOT"
+    --env CUDA_VISIBLE_DEVICES=0
+    --env HF_HOME="$HF_HOME"
+    --env HF_HUB_CACHE="$HF_HUB_CACHE"
+    --env HF_DATASETS_CACHE="$HF_DATASETS_CACHE"
+    --env HF_HUB_OFFLINE=1
+    --env HF_DATASETS_OFFLINE=1
+    --env TRANSFORMERS_OFFLINE=1
+    --env HF_HUB_DISABLE_TELEMETRY=1
+    --env TOKENIZERS_PARALLELISM=false
+    --env VLLM_LOGGING_LEVEL=INFO
+    --env VLLM_NO_USAGE_STATS=1
+    --env DO_NOT_TRACK=1
+    --env PYTHONNOUSERSITE=1
+    --env XDG_CACHE_HOME="$XDG_CACHE_HOME"
+    --env TRITON_CACHE_DIR="$TRITON_CACHE_DIR"
+    "$SIF"
+)
+
+echo "===== START CONTAINERIZED VLLM ====="
+setsid "${CONTAINER_EXEC[@]}" \
+    vllm serve "$SNAPSHOT" \
+    --served-model-name "$MODEL_ID" \
+    --host 127.0.0.1 \
+    --port "$PORT" \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.75 \
+    --max-model-len 8192 \
+    --dtype bfloat16 \
+    --quantization mxfp4 \
+    --load-format safetensors \
+    --model-impl vllm \
+    --seed 0 \
+    --reasoning-parser openai_gptoss \
+    > "$SERVER_LOG" 2>&1 &
+SERVER_PID="$!"
+echo "$SERVER_PID" > "$OUT_DIR/vllm_server.pid"
+
+SERVER_READY=0
+for attempt in $(seq 1 240); do
+    if curl --fail --silent --show-error "http://127.0.0.1:${PORT}/health" > /dev/null 2>&1; then
+        SERVER_READY=1
+        echo "server_ready_after_attempt=$attempt"
+        break
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "vLLM server exited before readiness" >&2
+        tail -n 200 "$SERVER_LOG" >&2 || true
+        exit 1
+    fi
+    sleep 5
+done
+[[ "$SERVER_READY" -eq 1 ]]
+
+curl --fail --silent --show-error \
+    "http://127.0.0.1:${PORT}/v1/models" \
+    > "$OUT_DIR/api_models_before_loop.json"
+nvidia-smi \
+    --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
+    --format=csv,noheader \
+    > "$OUT_DIR/gpu_memory_server_ready.csv"
+
+echo "===== RUN SINGLE-PROBLEM CLOSED LOOP ====="
+PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src" "$ENV_ROOT/bin/python" "$DRIVER_REL" \
+    --api-base-url "http://127.0.0.1:${PORT}/v1" \
+    --output-dir "$OUT_DIR" \
+    --execution-commit "$EXPECTED_EXECUTION_COMMIT" \
+    --job-id "$PBS_JOBID" \
+    --temperature 0.6 \
+    --max-tokens 1024 \
+    --reasoning-effort medium \
+    --max-generation-attempts 2
+
+nvidia-smi \
+    --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
+    --format=csv,noheader \
+    > "$OUT_DIR/gpu_memory_after_driver.csv"
+
+stop_server
+nvidia-smi \
+    --query-gpu=index,name,uuid,driver_version,memory.total,memory.used,memory.free \
+    --format=csv,noheader \
+    > "$OUT_DIR/gpu_memory_after_server_stop.csv"
+
+"$ENV_ROOT/bin/python" - "$OUT_DIR/closed_loop_result.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+with path.open(encoding="utf-8") as handle:
+    result = json.load(handle)
+if result.get("status") != "PASS":
+    raise SystemExit("closed_loop_result status is not PASS")
+if not all(result.get("gates", {}).values()):
+    raise SystemExit("one or more closed-loop gates failed")
+if result.get("selection_only_implemented") is not False:
+    raise SystemExit("unexpected SelectionOnly claim")
+if result.get("student_trained") is not False or result.get("af_measured") is not False:
+    raise SystemExit("unexpected downstream-result claim")
+print("closed_loop_artifact_gate=PASS")
+PY
+
+{
+    echo "status=PASS"
+    echo "method=$METHOD"
+    echo "job_id=$PBS_JOBID"
+    echo "commit=$EXPECTED_EXECUTION_COMMIT"
+    echo "model_id=$MODEL_ID"
+    echo "model_revision=b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+    echo "container_sha256=$EXPECTED_SIF_SHA256"
+    echo "row_index=0"
+    echo "reference_count=100"
+    echo "model_loaded=true"
+    echo "api_tested=true"
+    echo "scorer_loaded=true"
+    echo "single_problem_closed_loop=true"
+    echo "generator_scorer_coexistence_tested=true"
+    echo "cosine_improvement_required=false"
+    echo "selection_only_implemented=false"
+    echo "scientific_result=false"
+} > "$OUT_DIR/COMPLETE.partial"
+mv "$OUT_DIR/COMPLETE.partial" "$OUT_DIR/COMPLETE"
+SUCCESS=1
+
+echo "PASS: Stage 6C.2d single-problem closed-loop engineering preflight completed"
+echo "out_dir: $OUT_DIR"

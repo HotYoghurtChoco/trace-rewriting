@@ -16,6 +16,11 @@ Unlike the first draft, PASS requires all of the following:
 
 Candidate gate failures are recorded rather than raised immediately so a
 formal run produces a complete diagnostic vector before returning failure.
+
+The ``hardware`` mode is a prospective Stage 6C.2d diagnostic.  It keeps the
+frozen A100 scalar gates visible but does not stop at them, because its purpose
+is to measure whether the H200 runtime changes the already-frozen dot/cosine
+scores and ranking.  It never turns scalar drift into a formal PASS.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from optimize.score_candidates import _load_training_tokenizer
 
 
 METHOD_VERSION = "stage6c_gradient_scorer_equivalence_v4"
+HARDWARE_DIAGNOSTIC_VERSION = "stage6c_2d_h200_scorer_equivalence_v4"
 SCORING_SEED = 888
 EXPECTED_CANDIDATE_COUNT = 100
 EXPECTED_REFERENCE_COUNT = 100
@@ -59,6 +65,14 @@ SCALAR_ABSOLUTE_FLOOR = 1e-6
 # diagnostic only; the unchanged cosine limit is an independent hard gate.
 COSINE_ABSOLUTE_ERROR_MAX = 0.00225
 FROZEN_INTERNAL_CONSISTENCY_TOLERANCE = 1e-12
+HARDWARE_PRIMARY_GATE_NAMES = frozenset(
+    {
+        "dot",
+        "candidate_gradient_norm",
+        "gradient_cosine",
+        "token_metadata",
+    }
+)
 
 EXPECTED_SHA256 = {
     "score_csv": (
@@ -102,7 +116,11 @@ DEFAULT_STAGE6B_ROOT = Path(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("smoke", "formal"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("smoke", "formal", "hardware"),
+        required=True,
+    )
     parser.add_argument(
         "--formal-root",
         type=Path,
@@ -725,13 +743,23 @@ def main() -> None:
     )
     reference_loss_gate = reference_loss_error <= reference_loss_tolerance
     reference_norm_gate = reference_norm_error <= reference_norm_tolerance
-    if not reference_loss_gate or not reference_norm_gate:
+    reference_scalar_gates_pass = reference_loss_gate and reference_norm_gate
+    if not reference_scalar_gates_pass and args.mode != "hardware":
         raise RuntimeError(
             "Reference equivalence gate failed: "
             f"loss_error={reference_loss_error}, "
             f"loss_tolerance={reference_loss_tolerance}, "
             f"norm_error={reference_norm_error}, "
             f"norm_tolerance={reference_norm_tolerance}"
+        )
+    if args.mode == "hardware":
+        print(
+            "hardware_reference_scalar_diagnostic: "
+            f"{'PASS' if reference_scalar_gates_pass else 'FAIL_CONTINUE'} "
+            f"loss_error={reference_loss_error:.17g} "
+            f"loss_tolerance={reference_loss_tolerance:.17g} "
+            f"norm_error={reference_norm_error:.17g} "
+            f"norm_tolerance={reference_norm_tolerance:.17g}"
         )
 
     rank_to_index = {
@@ -852,6 +880,16 @@ def main() -> None:
             )
             if not passed
         ]
+        hardware_score_failed_gates = [
+            name
+            for name in failed_gates
+            if name in HARDWARE_PRIMARY_GATE_NAMES
+        ]
+        evaluation_failed_gates = (
+            hardware_score_failed_gates
+            if args.mode == "hardware"
+            else failed_gates
+        )
         row = {
             "candidate_index": candidate_index,
             "gradient_rank": int(frozen_score["gradient_rank"]),
@@ -909,6 +947,10 @@ def main() -> None:
             "expected_tokens": expected_tokens,
             "tokens": actual_tokens,
             "failed_gates": failed_gates,
+            "hardware_score_failed_gates": hardware_score_failed_gates,
+            "hardware_score_gate_status": (
+                "PASS" if not hardware_score_failed_gates else "FAIL"
+            ),
         }
         result_rows.append(row)
         frozen_dots.append(frozen_dot)
@@ -962,7 +1004,9 @@ def main() -> None:
             f"cosine_error={cosine_absolute_error:.9g} "
             f"loss_error={loss_absolute_error:.9g} "
             f"norm_error={norm_absolute_error:.9g} "
-            f"status={'FAIL' if failed_gates else 'PASS'}"
+            f"status={'FAIL' if evaluation_failed_gates else 'PASS'} "
+            f"all_locked_gate_status="
+            f"{'FAIL' if failed_gates else 'PASS'}"
         )
         if failed_gates:
             print(
@@ -970,6 +1014,8 @@ def main() -> None:
                 f"index={candidate_index} "
                 f"rank={row['gradient_rank']} "
                 f"failed_gates={','.join(failed_gates)} "
+                f"hardware_score_failed_gates="
+                f"{','.join(hardware_score_failed_gates) or 'none'} "
                 f"frozen_norm={frozen_candidate_norm:.17g} "
                 f"recomputed_norm={score.gradient_norm:.17g} "
                 f"norm_error={norm_absolute_error:.17g} "
@@ -981,14 +1027,45 @@ def main() -> None:
         frozen_cosines,
         recomputed_cosines,
     )
+    ranking_diagnostics: Dict[str, Any]
+    if len(candidate_indices) == EXPECTED_CANDIDATE_COUNT:
+        frozen_order = sorted(
+            range(len(frozen_cosines)),
+            key=lambda index: (frozen_cosines[index], index),
+        )
+        recomputed_order = sorted(
+            range(len(recomputed_cosines)),
+            key=lambda index: (recomputed_cosines[index], index),
+        )
+        ranking_diagnostics = {
+            "same_lowest_cosine_candidate": (
+                frozen_order[0] == recomputed_order[0]
+            ),
+            "lowest_ten_overlap": len(
+                set(frozen_order[:10]).intersection(recomputed_order[:10])
+            ),
+            "highest_ten_overlap": len(
+                set(frozen_order[-10:]).intersection(recomputed_order[-10:])
+            ),
+            "low_fifty_overlap": len(
+                set(frozen_order[:50]).intersection(recomputed_order[:50])
+            ),
+            "high_fifty_overlap": len(
+                set(frozen_order[-50:]).intersection(recomputed_order[-50:])
+            ),
+        }
+    else:
+        ranking_diagnostics = {
+            "status": "NOT_APPLICABLE_TO_THREE_CANDIDATE_SMOKE"
+        }
     formal_dot_vector_gate = (
         dot_spearman >= REPRODUCIBILITY_SPEARMAN_MIN
-        if args.mode == "formal"
+        if args.mode in {"formal", "hardware"}
         else None
     )
     formal_cosine_vector_gate = (
         cosine_spearman >= REPRODUCIBILITY_SPEARMAN_MIN
-        if args.mode == "formal"
+        if args.mode in {"formal", "hardware"}
         else None
     )
     model.zero_grad(set_to_none=True)
@@ -1032,9 +1109,23 @@ def main() -> None:
         )
         for gate_name in gate_names
     }
-    candidate_gates_pass = not candidate_failure_records
+    hardware_primary_failure_records = [
+        {
+            "candidate_index": int(row["candidate_index"]),
+            "failed_gates": sorted(
+                HARDWARE_PRIMARY_GATE_NAMES.intersection(row["failed_gates"])
+            ),
+        }
+        for row in result_rows
+        if HARDWARE_PRIMARY_GATE_NAMES.intersection(row["failed_gates"])
+    ]
+    candidate_gates_pass = (
+        not hardware_primary_failure_records
+        if args.mode == "hardware"
+        else not candidate_failure_records
+    )
     vector_gates_pass = (
-        args.mode != "formal"
+        args.mode == "smoke"
         or (
             bool(formal_dot_vector_gate)
             and bool(formal_cosine_vector_gate)
@@ -1042,13 +1133,26 @@ def main() -> None:
     )
     overall_pass = candidate_gates_pass and vector_gates_pass
     overall_status = "PASS" if overall_pass else "FAIL"
+    summary_status = "COMPLETE" if args.mode == "hardware" else overall_status
+    method_version = (
+        HARDWARE_DIAGNOSTIC_VERSION
+        if args.mode == "hardware"
+        else METHOD_VERSION
+    )
 
     summary = {
-        "status": overall_status,
-        "method_version": METHOD_VERSION,
+        "status": summary_status,
+        "method_version": method_version,
         "mode": args.mode,
         "execution_commit": args.execution_commit,
-        "scope": "scorer_equivalence_only_no_rewrite_no_optimizer_step",
+        "scope": (
+            "h200_vs_frozen_a100_score_diagnostic_no_rewrite_no_optimizer_step"
+            if args.mode == "hardware"
+            else "scorer_equivalence_only_no_rewrite_no_optimizer_step"
+        ),
+        "hardware_score_equivalence_status": (
+            overall_status if args.mode == "hardware" else "NOT_APPLICABLE"
+        ),
         "candidate_count": len(result_rows),
         "reference_count": reference.example_count,
         "candidate_indices": candidate_indices,
@@ -1060,6 +1164,24 @@ def main() -> None:
         "reference_gradient_accumulation_dtype": "float32",
         "optimizer_created": False,
         "optimizer_step_performed": False,
+        "runtime": {
+            "device_name": torch.cuda.get_device_name(device),
+            "device_capability": list(torch.cuda.get_device_capability(device)),
+            "torch_version": torch.__version__,
+            "torch_compiled_cuda": torch.version.cuda,
+            "cudnn_version": torch.backends.cudnn.version(),
+            "deterministic_algorithms_enabled": (
+                torch.are_deterministic_algorithms_enabled()
+            ),
+            "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+            "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+            "cuda_matmul_allow_tf32": bool(
+                torch.backends.cuda.matmul.allow_tf32
+            ),
+            "cublas_workspace_config": os.environ.get(
+                "CUBLAS_WORKSPACE_CONFIG"
+            ),
+        },
         "input_identity": {
             "status": "PASS",
             "critical_file_sha256": verified_sha256,
@@ -1070,7 +1192,12 @@ def main() -> None:
             "adapter_identity": "PASS",
         },
         "reference_equivalence": {
-            "status": "PASS",
+            "status": "PASS" if reference_scalar_gates_pass else "FAIL",
+            "role": (
+                "diagnostic_only_not_a_hardware_score_acceptance_gate"
+                if args.mode == "hardware"
+                else "hard_gate"
+            ),
             "frozen_loss_mean": frozen_reference_loss,
             "recomputed_loss_mean": recomputed_reference_loss,
             "loss_absolute_error": reference_loss_error,
@@ -1091,6 +1218,15 @@ def main() -> None:
                 for item in candidate_failure_records
             ],
             "failure_records": candidate_failure_records,
+            "hardware_primary_gate_names": sorted(
+                HARDWARE_PRIMARY_GATE_NAMES
+            ),
+            "hardware_primary_failed_candidate_count": len(
+                hardware_primary_failure_records
+            ),
+            "hardware_primary_failure_records": (
+                hardware_primary_failure_records
+            ),
             "gate_failure_counts": gate_failure_counts,
             "per_candidate_dot_gate": (
                 "PASS" if gate_failure_counts["dot"] == 0 else "FAIL"
@@ -1163,6 +1299,7 @@ def main() -> None:
             ),
             "frozen_vs_recomputed_dot_spearman": dot_spearman,
             "frozen_vs_recomputed_cosine_spearman": cosine_spearman,
+            "ranking_diagnostics": ranking_diagnostics,
             "formal_spearman_minimum": REPRODUCIBILITY_SPEARMAN_MIN,
             "formal_dot_vector_gate": (
                 "PASS"
@@ -1194,6 +1331,16 @@ def main() -> None:
             "frozen_gradients_absent": frozen_gradients_absent,
         },
         "pass_fail_criteria": {
+            "hardware_reference_scalar_role": (
+                "diagnostic_only"
+                if args.mode == "hardware"
+                else "hard_gate"
+            ),
+            "hardware_candidate_loss_role": (
+                "diagnostic_only"
+                if args.mode == "hardware"
+                else "hard_gate"
+            ),
             "candidate_gradient_norm_hard_gate": (
                 "frozen_and_recomputed_norms_must_be_finite_and_"
                 "strictly_positive"
@@ -1228,11 +1375,21 @@ def main() -> None:
             )
         ),
         "interpretation_boundary": (
-            "PASS establishes scorer implementation equivalence only; "
-            "FAIL preserves diagnostic evidence but does not by itself "
-            "identify implementation drift versus numerical "
-            "reproducibility. Neither status is evidence that Stage 6C "
-            "improves rewrite quality or student accuracy."
+            (
+                "Hardware mode completes a prospective diagnostic even when "
+                "the score-equivalence outcome is FAIL. A PASS outcome is "
+                "evidence about frozen score/rank stability only and does "
+                "not amend the formal runtime, unlock Stage 6C.3, or show a "
+                "rewrite/student improvement."
+            )
+            if args.mode == "hardware"
+            else (
+                "PASS establishes scorer implementation equivalence only; "
+                "FAIL preserves diagnostic evidence but does not by itself "
+                "identify implementation drift versus numerical "
+                "reproducibility. Neither status is evidence that Stage 6C "
+                "improves rewrite quality or student accuracy."
+            )
         ),
     }
 
@@ -1249,7 +1406,7 @@ def main() -> None:
     print(
         f"stage6c_scorer_equivalence_{args.mode}: {overall_status}"
     )
-    if not overall_pass:
+    if not overall_pass and args.mode != "hardware":
         raise SystemExit(1)
 
 

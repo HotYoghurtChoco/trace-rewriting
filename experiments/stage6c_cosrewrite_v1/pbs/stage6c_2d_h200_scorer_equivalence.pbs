@@ -1,0 +1,174 @@
+#!/bin/bash
+#PBS -N tr-s6c-hweq-v4
+#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:gpu_model=H200
+#PBS -l walltime=02:00:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-hweq-v4.pbs.log
+
+set -euo pipefail
+
+WORKTREE="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+SCRATCH="/srv/scratch/z5463756/honour"
+ENV="$SCRATCH/envs/trace-rewriting-official"
+RESULT_ROOT="$SCRATCH/results/stage6c-cosrewrite-qwen3-1.7b-v1"
+EXPECTED_EXECUTION_COMMIT="${EXPECTED_EXECUTION_COMMIT:?Pass the committed 6C HEAD with qsub -v}"
+
+SCORER_REL="optimize/gradient_feedback.py"
+SCORE_HELPER_REL="optimize/score_candidates.py"
+UTILS_REL="src/utils.py"
+VERIFY_REL="experiments/stage6c_cosrewrite_v1/verify_scorer_equivalence.py"
+COMPARE_REL="experiments/stage6c_cosrewrite_v1/compare_h200_scorer_repeats.py"
+LAUNCHER_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2d_h200_scorer_equivalence.pbs"
+
+JOB_ID_LABEL="${PBS_JOBID%%.*}"
+OUT_DIR="$RESULT_ROOT/backend_preflight/h200_scorer_equivalence_v4_$JOB_ID_LABEL"
+RUNTIME_DIR="$OUT_DIR/runtime"
+FINAL_SUMMARY="$OUT_DIR/h200_scorer_equivalence_v4_summary.json"
+
+module purge
+module load python/3.11.3
+cd "$WORKTREE"
+
+if [[ "$(git branch --show-current)" != "research/stage6c-cosrewrite" ]]; then
+    echo "FAIL: unexpected Stage 6C branch"
+    exit 1
+fi
+if [[ "$(git rev-parse HEAD)" != "$EXPECTED_EXECUTION_COMMIT" ]]; then
+    echo "FAIL: execution commit mismatch"
+    exit 1
+fi
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAIL: tracked or staged changes exist"
+    git status --short
+    exit 1
+fi
+
+for relative_path in \
+    "$SCORER_REL" \
+    "$SCORE_HELPER_REL" \
+    "$UTILS_REL" \
+    "$VERIFY_REL" \
+    "$COMPARE_REL" \
+    "$LAUNCHER_REL"
+do
+    git cat-file -e "HEAD:$relative_path"
+done
+
+if [[ -e "$OUT_DIR" ]]; then
+    echo "FAIL: output directory already exists: $OUT_DIR"
+    exit 1
+fi
+mkdir -p \
+    "$OUT_DIR/provenance" \
+    "$RUNTIME_DIR/optimize" \
+    "$RUNTIME_DIR/src" \
+    "$RUNTIME_DIR/experiments/stage6c_cosrewrite_v1"
+
+git rev-parse HEAD > "$OUT_DIR/provenance/git_commit.txt"
+git status --short --branch > "$OUT_DIR/provenance/git_status.txt"
+git show "HEAD:$LAUNCHER_REL" > "$OUT_DIR/provenance/launcher.pbs"
+git show "HEAD:$SCORER_REL" > "$RUNTIME_DIR/$SCORER_REL"
+git show "HEAD:$SCORE_HELPER_REL" > "$RUNTIME_DIR/$SCORE_HELPER_REL"
+git show "HEAD:$UTILS_REL" > "$RUNTIME_DIR/$UTILS_REL"
+git show "HEAD:$VERIFY_REL" > "$RUNTIME_DIR/$VERIFY_REL"
+git show "HEAD:$COMPARE_REL" > "$RUNTIME_DIR/$COMPARE_REL"
+
+export PYTHONPATH="$RUNTIME_DIR/src:$RUNTIME_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false
+unset CUBLAS_WORKSPACE_CONFIG || true
+
+echo "===== JOB ====="
+echo "PBS_JOBID: $PBS_JOBID"
+echo "hostname: $(hostname)"
+echo "method: stage6c_2d_h200_scorer_equivalence_v4"
+echo "execution_commit: $EXPECTED_EXECUTION_COMMIT"
+echo "out_dir: $OUT_DIR"
+echo "deterministic_policy: reproduce_v3_defaults_then_measure_two_processes"
+echo
+nvidia-smi
+
+cd "$RUNTIME_DIR"
+for repeat in 1 2; do
+    repeat_dir="$OUT_DIR/repeat_$repeat"
+    mkdir -p "$repeat_dir"
+    echo
+    echo "===== H200 HARDWARE DIAGNOSTIC REPEAT $repeat ====="
+    set +e
+    "$ENV/bin/python" "$RUNTIME_DIR/$VERIFY_REL" \
+        --mode hardware \
+        --output-dir "$repeat_dir" \
+        --execution-commit "$EXPECTED_EXECUTION_COMMIT" \
+        2>&1 | tee "$repeat_dir/run.log"
+    pipeline_status=("${PIPESTATUS[@]}")
+    set -e
+
+    verifier_status="${pipeline_status[0]}"
+    tee_status="${pipeline_status[1]}"
+    if (( verifier_status != 0 || tee_status != 0 )); then
+        printf '%s\n' \
+            'status=FAIL' \
+            'method=stage6c_2d_h200_scorer_equivalence_v4' \
+            "repeat=$repeat" \
+            "job_id=$PBS_JOBID" \
+            "commit=$EXPECTED_EXECUTION_COMMIT" \
+            "verifier_exit_status=$verifier_status" \
+            "tee_exit_status=$tee_status" \
+            > "$OUT_DIR/FAILED"
+        echo "FAIL: H200 scorer diagnostic repeat $repeat did not complete"
+        exit 1
+    fi
+    nvidia-smi --query-gpu=index,name,memory.total,memory.used,memory.free \
+        --format=csv,noheader,nounits \
+        > "$OUT_DIR/gpu_memory_after_repeat_${repeat}.csv"
+done
+
+echo
+echo "===== COMPARE INDEPENDENT H200 REPEATS ====="
+set +e
+"$ENV/bin/python" "$RUNTIME_DIR/$COMPARE_REL" \
+    --repeat-one "$OUT_DIR/repeat_1" \
+    --repeat-two "$OUT_DIR/repeat_2" \
+    --output "$FINAL_SUMMARY" \
+    --execution-commit "$EXPECTED_EXECUTION_COMMIT" \
+    2>&1 | tee "$OUT_DIR/repeat_comparison.log"
+comparison_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+
+comparison_status="${comparison_pipeline_status[0]}"
+comparison_tee_status="${comparison_pipeline_status[1]}"
+if (( comparison_status != 0 || comparison_tee_status != 0 )); then
+    printf '%s\n' \
+        'status=FAIL' \
+        'method=stage6c_2d_h200_scorer_equivalence_v4' \
+        "job_id=$PBS_JOBID" \
+        "commit=$EXPECTED_EXECUTION_COMMIT" \
+        "comparison_exit_status=$comparison_status" \
+        "tee_exit_status=$comparison_tee_status" \
+        > "$OUT_DIR/FAILED"
+    echo "FAIL: independent H200 repeat comparison did not complete"
+    exit 1
+fi
+
+read_summary='import json,sys; '
+read_summary+='data=json.load(open(sys.argv[1])); '
+read_summary+='print(str(data["hardware_score_equivalence_supported"]).lower())'
+hardware_supported="$(
+    "$ENV/bin/python" -c "$read_summary" "$FINAL_SUMMARY"
+)"
+
+printf '%s\n' \
+    'status=COMPLETE' \
+    'method=stage6c_2d_h200_scorer_equivalence_v4' \
+    "job_id=$PBS_JOBID" \
+    "commit=$EXPECTED_EXECUTION_COMMIT" \
+    "hardware_score_equivalence_supported=$hardware_supported" \
+    > "$OUT_DIR/COMPLETE"
+
+echo
+echo "COMPLETE: H200 scorer-equivalence diagnostic finished"
+echo "hardware_score_equivalence_supported: $hardware_supported"
+echo "This marker records diagnostic completion, not Stage 6C.2d closure."
+echo "out_dir: $OUT_DIR"

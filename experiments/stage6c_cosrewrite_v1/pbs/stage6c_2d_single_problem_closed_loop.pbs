@@ -1,14 +1,14 @@
 #!/bin/bash
-#PBS -N tr-s6c-loop-v2
+#PBS -N tr-s6c-loop-v3
 #PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:gpu_model=H200
-#PBS -l walltime=03:00:00
+#PBS -l walltime=01:00:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-loop-v1.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-loop-v3.pbs.log
 
 set -euo pipefail
 umask 077
 
-METHOD="stage6c_2d_single_problem_closed_loop_v2"
+METHOD="stage6c_2d_single_problem_closed_loop_v3"
 REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 DRIVER_REL="experiments/stage6c_cosrewrite_v1/run_single_problem_closed_loop.py"
 PBS_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2d_single_problem_closed_loop.pbs"

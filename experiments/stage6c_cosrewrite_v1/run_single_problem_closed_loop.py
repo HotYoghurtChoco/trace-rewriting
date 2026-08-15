@@ -45,7 +45,7 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer
 from optimize.score_candidates import _load_training_tokenizer
 
 
-METHOD = "stage6c_2d_single_problem_closed_loop_v2"
+METHOD = "stage6c_2d_single_problem_closed_loop_v3"
 CLAIM_BOUNDARY = (
     "Engineering preflight only: no executable formal-protocol lock, no "
     "SelectionOnly comparison, no method-effect claim, and no student/AF result."
@@ -677,22 +677,154 @@ def run(args: argparse.Namespace) -> int:
         all(int(item["tokens"]["completion_tokens_removed"]) == 0 for item in reference.per_example),
         "A frozen reference completion was truncated",
     )
-    reference_loss_error = abs(
-        float(reference.loss_mean) - float(inputs["frozen_summary"]["reference_loss_mean"])
+    frozen_reference_loss = float(inputs["frozen_summary"]["reference_loss_mean"])
+    recomputed_reference_loss = float(reference.loss_mean)
+    frozen_reference_norm = float(
+        inputs["frozen_summary"]["mean_reference_gradient_norm"]
     )
-    reference_norm_error = abs(
-        float(reference.mean_gradient_norm)
-        - float(inputs["frozen_summary"]["mean_reference_gradient_norm"])
+    recomputed_reference_norm = float(reference.mean_gradient_norm)
+    reference_loss_error = abs(recomputed_reference_loss - frozen_reference_loss)
+    reference_norm_error = abs(recomputed_reference_norm - frozen_reference_norm)
+    reference_loss_tolerance = float(
+        equivalence.scalar_tolerance(frozen_reference_loss)
+    )
+    reference_norm_tolerance = float(
+        equivalence.scalar_tolerance(frozen_reference_norm)
+    )
+    reference_loss_gate = reference_loss_error <= reference_loss_tolerance
+    reference_norm_gate = reference_norm_error <= reference_norm_tolerance
+
+    parameter_versions_after_reference = {
+        name: parameter._version for name, parameter in model.named_parameters()
+    }
+    trainable_sha_after_reference = equivalence.named_parameter_sha256(trainable)
+    parameter_versions_unchanged = (
+        parameter_versions_after_reference == parameter_versions_before
+    )
+    trainable_sha_unchanged = trainable_sha_after_reference == trainable_sha_before
+
+    reference_per_example_path = (
+        output_dir / "reference_recompute_per_example.jsonl"
+    )
+    atomic_jsonl(reference_per_example_path, reference.per_example)
+    reference_diagnostics = {
+        "schema": "stage6c_2d_reference_recompute_diagnostics_v1",
+        "status": (
+            "PASS"
+            if reference_loss_gate
+            and reference_norm_gate
+            and parameter_versions_unchanged
+            and trainable_sha_unchanged
+            else "FAIL"
+        ),
+        "method": METHOD,
+        "claim_boundary": CLAIM_BOUNDARY,
+        "execution_commit": args.execution_commit,
+        "job_id": args.job_id,
+        "scoring_seed": scoring_seed,
+        "reference_count": int(reference.example_count),
+        "reference_per_example_file_sha256": file_sha256(
+            reference_per_example_path
+        ),
+        "model": {
+            "base_model_path": str(inputs["model_name"]),
+            "tokenizer_path": str(inputs["tokenizer_name"]),
+            "adapter_path": str(inputs["adapter_path"]),
+            "compute_dtype": str(compute_dtype),
+            "model_training": bool(model.training),
+            "use_cache": bool(model.config.use_cache),
+            "trainable_tensor_count": int(scorer.trainable_tensor_count),
+            "trainable_parameter_count": int(scorer.trainable_parameter_count),
+        },
+        "runtime": {
+            "torch_version": torch.__version__,
+            "torch_compiled_cuda": torch.version.cuda,
+            "cudnn_version": torch.backends.cudnn.version(),
+            "cuda_device_name": torch.cuda.get_device_name(device),
+            "cuda_device_capability": list(torch.cuda.get_device_capability(device)),
+            "deterministic_algorithms_enabled": (
+                torch.are_deterministic_algorithms_enabled()
+            ),
+            "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+            "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+            "cuda_matmul_allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
+            "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+            "cuda_memory": torch_memory_snapshot(),
+        },
+        "reference_loss": {
+            "frozen": frozen_reference_loss,
+            "recomputed": recomputed_reference_loss,
+            "absolute_error": reference_loss_error,
+            "tolerance": reference_loss_tolerance,
+            "gate": "PASS" if reference_loss_gate else "FAIL",
+        },
+        "reference_mean_gradient_norm": {
+            "frozen": frozen_reference_norm,
+            "recomputed": recomputed_reference_norm,
+            "absolute_error": reference_norm_error,
+            "tolerance": reference_norm_tolerance,
+            "gate": "PASS" if reference_norm_gate else "FAIL",
+        },
+        "parameter_integrity_after_reference": {
+            "versions_unchanged": parameter_versions_unchanged,
+            "trainable_sha256_before": trainable_sha_before,
+            "trainable_sha256_after": trainable_sha_after_reference,
+            "trainable_sha256_unchanged": trainable_sha_unchanged,
+        },
+        "verified_source_sha256": inputs["verified_source_sha256"],
+        "verified_frozen_sha256": inputs["verified_frozen_sha256"],
+    }
+    atomic_json(
+        output_dir / "reference_recompute_diagnostics.json",
+        reference_diagnostics,
+    )
+    print(
+        "reference_loss_gate={} frozen={:.17g} recomputed={:.17g} "
+        "absolute_error={:.17g} tolerance={:.17g}".format(
+            "PASS" if reference_loss_gate else "FAIL",
+            frozen_reference_loss,
+            recomputed_reference_loss,
+            reference_loss_error,
+            reference_loss_tolerance,
+        ),
+        flush=True,
+    )
+    print(
+        "reference_norm_gate={} frozen={:.17g} recomputed={:.17g} "
+        "absolute_error={:.17g} tolerance={:.17g}".format(
+            "PASS" if reference_norm_gate else "FAIL",
+            frozen_reference_norm,
+            recomputed_reference_norm,
+            reference_norm_error,
+            reference_norm_tolerance,
+        ),
+        flush=True,
     )
     require(
-        reference_loss_error
-        <= equivalence.scalar_tolerance(float(inputs["frozen_summary"]["reference_loss_mean"])),
-        "Recomputed reference loss differs from the frozen scorer",
+        parameter_versions_unchanged and trainable_sha_unchanged,
+        "Scorer parameters changed while recomputing the frozen reference",
     )
     require(
-        reference_norm_error
-        <= equivalence.scalar_tolerance(float(inputs["frozen_summary"]["mean_reference_gradient_norm"])),
-        "Recomputed reference norm differs from the frozen scorer",
+        reference_loss_gate,
+        (
+            "Recomputed reference loss differs from the frozen scorer: "
+            f"frozen={frozen_reference_loss:.17g}, "
+            f"recomputed={recomputed_reference_loss:.17g}, "
+            f"absolute_error={reference_loss_error:.17g}, "
+            f"tolerance={reference_loss_tolerance:.17g}, "
+            f"device={torch.cuda.get_device_name(device)}"
+        ),
+    )
+    require(
+        reference_norm_gate,
+        (
+            "Recomputed reference norm differs from the frozen scorer: "
+            f"frozen={frozen_reference_norm:.17g}, "
+            f"recomputed={recomputed_reference_norm:.17g}, "
+            f"absolute_error={reference_norm_error:.17g}, "
+            f"tolerance={reference_norm_tolerance:.17g}, "
+            f"device={torch.cuda.get_device_name(device)}"
+        ),
     )
 
     baseline_score = score_trace(scorer, reference, problem, baseline)

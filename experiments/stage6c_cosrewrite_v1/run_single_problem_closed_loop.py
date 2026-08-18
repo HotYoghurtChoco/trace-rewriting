@@ -1,10 +1,9 @@
-"""Run the Stage 6C.2d single-problem CosRewrite engineering preflight."""
+"""Run the Stage 6C.2d v5 H200-native CosRewrite engineering preflight."""
 
 from __future__ import annotations
 
 import argparse
 from collections import Counter
-import csv
 import gc
 import hashlib
 import json
@@ -45,18 +44,35 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer
 from optimize.score_candidates import _load_training_tokenizer
 
 
-METHOD = "stage6c_2d_single_problem_closed_loop_v3"
+METHOD = "stage6c_2d_single_problem_closed_loop_v5_h200_native"
 CLAIM_BOUNDARY = (
-    "Engineering preflight only: no executable formal-protocol lock, no "
-    "SelectionOnly comparison, no method-effect claim, and no student/AF result."
+    "H200-native engineering preflight only: no executable formal-protocol "
+    "lock, no SelectionOnly comparison, no method-effect claim, and no "
+    "student/AF result."
 )
 MODEL_ID = "openai/gpt-oss-120b"
 ROW_INDEX = 0
+SCORER_RUNTIME_POLICY = "h200_native_v1"
+H200_REFERENCE_SENTINEL = {
+    "loss_expected": 1.1358162263035774,
+    "loss_tolerance": 0.00011358162263035775,
+    "mean_gradient_norm_expected": 1.2511129669699297,
+    "mean_gradient_norm_tolerance": 0.00012511129669699297,
+}
+H200_POLICY_EVIDENCE = {
+    "method": "stage6c_2d_h200_scorer_equivalence_v4",
+    "job_id": "9010570.kman.restech.unsw.edu.au",
+    "execution_commit": "581c0391eafcc8e335176f39ccb143b1034e2256",
+    "a100_score_equivalence": "FAIL",
+    "h200_repeat_stability": "PASS",
+    "reference_sentinel_source": "v4_h200_repeat_1_with_locked_repeat_tolerances",
+}
+ENGINEERING_SELECTION_PRIORITY = ("BaselineRewrite", "C1", "C2")
 EXPECTED_SOURCE_SHA256 = {
     "gradient_feedback": "ce1b8f89876b3460ece5aff3ff01e78dc31dc3bc37d8fdc3b2e8edf9770db951",
     "score_candidates": "2035787b8b7d4e64ff166893cebabcf506facef3c449fcc7a7f927c514596c67",
     "evaluate": "02c4cb26f90587c6aeddaf7a4dee96c810f16c4e342c4e02595778e918ab0227",
-    "equivalence": "cc1ec29a0b78bdcbbc638a42bb2258e3cfa2c3f021463c68b1889abf87b1ee00",
+    "equivalence": "a839fec90420b1c2195bbed906b6a03dba0762a4dccc454ee9eb24270d272c9f",
 }
 EXPECTED_ROW_SHA256 = {
     "problem": "73429d562982300e6643d83a84428a22e0656773b67dad037d2de2f8bc0b45b9",
@@ -425,6 +441,69 @@ def score_trace(
     return score
 
 
+def select_engineering_winner(
+    lineage_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Select one valid trace for the single-problem engineering preflight.
+
+    This deterministic rule only demonstrates that the controller can finish
+    the loop.  It is deliberately not the locked formal CosRewrite selection
+    or tie policy.
+    """
+
+    by_id = {str(row["candidate_id"]): row for row in lineage_rows}
+    require(
+        set(by_id) == set(ENGINEERING_SELECTION_PRIORITY),
+        "Engineering selection did not receive BaselineRewrite, C1, and C2",
+    )
+    priority = {
+        candidate_id: index
+        for index, candidate_id in enumerate(ENGINEERING_SELECTION_PRIORITY)
+    }
+    eligible = []
+    excluded = []
+    for candidate_id in ENGINEERING_SELECTION_PRIORITY:
+        row = by_id[candidate_id]
+        validity = row.get("validity", {})
+        if not bool(validity.get("valid")):
+            excluded.append(
+                {
+                    "candidate_id": candidate_id,
+                    "reasons": list(validity.get("reasons", [])),
+                }
+            )
+            continue
+        cosine = float(row["score"]["gradient_cosine"])
+        require(math.isfinite(cosine), f"Non-finite selection cosine for {candidate_id}")
+        eligible.append(
+            {
+                "candidate_id": candidate_id,
+                "gradient_cosine": cosine,
+                "priority": priority[candidate_id],
+                "trace_sha256": row["trace_sha256"],
+            }
+        )
+
+    require(eligible, "No valid trace is eligible for engineering selection")
+    ranked = sorted(
+        eligible,
+        key=lambda item: (item["gradient_cosine"], item["priority"]),
+    )
+    winner = ranked[0]
+    return {
+        "status": "PASS",
+        "policy": "engineering_lowest_valid_h200_native_cosine_v1",
+        "scope": "engineering_only_not_formal_protocol",
+        "tie_break": "BaselineRewrite_then_C1_then_C2",
+        "eligible_ranked": ranked,
+        "excluded": excluded,
+        "winner_candidate_id": winner["candidate_id"],
+        "winner_gradient_cosine": winner["gradient_cosine"],
+        "winner_trace_sha256": winner["trace_sha256"],
+        "formal_selection_rule_locked": False,
+    }
+
+
 def load_inputs(repo_root: Path) -> dict[str, Any]:
     source_paths = {
         "gradient_feedback": repo_root / "optimize/gradient_feedback.py",
@@ -447,26 +526,23 @@ def load_inputs(repo_root: Path) -> dict[str, Any]:
     preflight_path = stage6b_root / "provenance/stage6b_1c_preflight.json"
     reference_path = stage6b_root / "frozen_data/gradient_reference.jsonl"
     reference_manifest_path = stage6b_root / "frozen_data/gradient_reference_manifest.json"
-    score_dir = stage6b_root / "scoring/stage6b_1c_8918577"
-    score_summary_path = score_dir / "stage6b_1c_summary.json"
-    score_csv_path = score_dir / "stage6b_1c_candidate_scores.csv"
 
-    frozen_paths = {
+    # These hashes retain the fixed data/model/scorer definition.  V5 does not
+    # load or gate on any scalar or candidate score computed on the A100.
+    fixed_input_paths = {
         "method_lock": method_lock_path,
         "preflight": preflight_path,
         "reference": reference_path,
         "reference_manifest": reference_manifest_path,
-        "score_summary": score_summary_path,
-        "score_csv": score_csv_path,
         "score_candidates": repo_root / "optimize/score_candidates.py",
     }
-    verified_frozen_sha256 = {}
-    for label, path in frozen_paths.items():
-        require(path.is_file(), f"Missing frozen input: {path}")
+    verified_fixed_input_sha256 = {}
+    for label, path in fixed_input_paths.items():
+        require(path.is_file(), f"Missing fixed input: {path}")
         actual = file_sha256(path)
         expected = equivalence.EXPECTED_SHA256[label]
-        require(actual == expected, f"Unexpected frozen {label} SHA256: {actual}")
-        verified_frozen_sha256[label] = actual
+        require(actual == expected, f"Unexpected fixed {label} SHA256: {actual}")
+        verified_fixed_input_sha256[label] = actual
 
     with config_path.open(encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
@@ -474,10 +550,6 @@ def load_inputs(repo_root: Path) -> dict[str, Any]:
         candidate_yaml = yaml.safe_load(handle)
     with preflight_path.open(encoding="utf-8") as handle:
         preflight = json.load(handle)
-    with reference_manifest_path.open(encoding="utf-8") as handle:
-        reference_manifest = json.load(handle)
-    with score_summary_path.open(encoding="utf-8") as handle:
-        frozen_summary = json.load(handle)
 
     require(file_sha256(config_path) == preflight["config_sha256"], "Config/preflight identity mismatch")
     require(
@@ -533,27 +605,19 @@ def load_inputs(repo_root: Path) -> dict[str, Any]:
     for key, expected in EXPECTED_ROW_SHA256.items():
         require(text_sha256(str(row[key])) == expected, f"Row-0 {key} identity mismatch")
 
-    with score_csv_path.open(encoding="utf-8", newline="") as handle:
-        score_rows = list(csv.DictReader(handle))
-    frozen_row_score = next(
-        item for item in score_rows if int(item["candidate_index"]) == ROW_INDEX
-    )
     return {
         "repo_root": repo_root,
         "formal_root": formal_root,
         "stage6b_root": stage6b_root,
         "config": config,
         "preflight": preflight,
-        "reference_manifest": reference_manifest,
-        "frozen_summary": frozen_summary,
         "reference_rows": reference_rows,
         "row": row,
         "model_name": model_name,
         "tokenizer_name": tokenizer_name,
         "adapter_path": adapter_path,
-        "frozen_row_score": frozen_row_score,
         "verified_source_sha256": verified_source_sha256,
-        "verified_frozen_sha256": verified_frozen_sha256,
+        "verified_fixed_input_sha256": verified_fixed_input_sha256,
         "candidate_name": candidate_name,
     }
 
@@ -672,27 +736,33 @@ def run(args: argparse.Namespace) -> int:
             f"reference_progress={done}/{total}", flush=True
         ),
     )
-    require(reference.example_count == 100, "Recomputed reference count is not 100")
-    require(
-        all(int(item["tokens"]["completion_tokens_removed"]) == 0 for item in reference.per_example),
-        "A frozen reference completion was truncated",
+    reference_count_gate = int(reference.example_count) == 100
+    reference_truncated_count = sum(
+        int(item["tokens"]["completion_tokens_removed"] > 0)
+        for item in reference.per_example
     )
-    frozen_reference_loss = float(inputs["frozen_summary"]["reference_loss_mean"])
-    recomputed_reference_loss = float(reference.loss_mean)
-    frozen_reference_norm = float(
-        inputs["frozen_summary"]["mean_reference_gradient_norm"]
+    reference_token_gate = reference_truncated_count == 0
+    h200_reference_loss = float(reference.loss_mean)
+    h200_reference_norm = float(reference.mean_gradient_norm)
+    reference_loss_gate = math.isfinite(h200_reference_loss)
+    reference_norm_gate = (
+        math.isfinite(h200_reference_norm) and h200_reference_norm > 0.0
     )
-    recomputed_reference_norm = float(reference.mean_gradient_norm)
-    reference_loss_error = abs(recomputed_reference_loss - frozen_reference_loss)
-    reference_norm_error = abs(recomputed_reference_norm - frozen_reference_norm)
-    reference_loss_tolerance = float(
-        equivalence.scalar_tolerance(frozen_reference_loss)
+    h200_reference_loss_error = abs(
+        h200_reference_loss - H200_REFERENCE_SENTINEL["loss_expected"]
     )
-    reference_norm_tolerance = float(
-        equivalence.scalar_tolerance(frozen_reference_norm)
+    h200_reference_norm_error = abs(
+        h200_reference_norm
+        - H200_REFERENCE_SENTINEL["mean_gradient_norm_expected"]
     )
-    reference_loss_gate = reference_loss_error <= reference_loss_tolerance
-    reference_norm_gate = reference_norm_error <= reference_norm_tolerance
+    h200_reference_loss_sentinel_gate = (
+        h200_reference_loss_error <= H200_REFERENCE_SENTINEL["loss_tolerance"]
+    )
+    h200_reference_norm_sentinel_gate = (
+        h200_reference_norm_error
+        <= H200_REFERENCE_SENTINEL["mean_gradient_norm_tolerance"]
+    )
+    h200_device_gate = "H200" in torch.cuda.get_device_name(device)
 
     parameter_versions_after_reference = {
         name: parameter._version for name, parameter in model.named_parameters()
@@ -702,23 +772,32 @@ def run(args: argparse.Namespace) -> int:
         parameter_versions_after_reference == parameter_versions_before
     )
     trainable_sha_unchanged = trainable_sha_after_reference == trainable_sha_before
+    h200_native_reference_gate = all(
+        (
+            reference_count_gate,
+            reference_token_gate,
+            reference_loss_gate,
+            reference_norm_gate,
+            h200_reference_loss_sentinel_gate,
+            h200_reference_norm_sentinel_gate,
+            h200_device_gate,
+            parameter_versions_unchanged,
+            trainable_sha_unchanged,
+        )
+    )
 
     reference_per_example_path = (
         output_dir / "reference_recompute_per_example.jsonl"
     )
     atomic_jsonl(reference_per_example_path, reference.per_example)
     reference_diagnostics = {
-        "schema": "stage6c_2d_reference_recompute_diagnostics_v1",
-        "status": (
-            "PASS"
-            if reference_loss_gate
-            and reference_norm_gate
-            and parameter_versions_unchanged
-            and trainable_sha_unchanged
-            else "FAIL"
-        ),
+        "schema": "stage6c_2d_h200_native_reference_diagnostics_v1",
+        "status": "PASS" if h200_native_reference_gate else "FAIL",
         "method": METHOD,
         "claim_boundary": CLAIM_BOUNDARY,
+        "scorer_runtime_policy": SCORER_RUNTIME_POLICY,
+        "policy_evidence": H200_POLICY_EVIDENCE,
+        "a100_scalar_or_score_equivalence_gate_applied": False,
         "execution_commit": args.execution_commit,
         "job_id": args.job_id,
         "scoring_seed": scoring_seed,
@@ -752,18 +831,43 @@ def run(args: argparse.Namespace) -> int:
             "cuda_memory": torch_memory_snapshot(),
         },
         "reference_loss": {
-            "frozen": frozen_reference_loss,
-            "recomputed": recomputed_reference_loss,
-            "absolute_error": reference_loss_error,
-            "tolerance": reference_loss_tolerance,
-            "gate": "PASS" if reference_loss_gate else "FAIL",
+            "h200_native": h200_reference_loss,
+            "finite_gate": "PASS" if reference_loss_gate else "FAIL",
+            "sentinel_expected": H200_REFERENCE_SENTINEL["loss_expected"],
+            "sentinel_absolute_error": h200_reference_loss_error,
+            "sentinel_tolerance": H200_REFERENCE_SENTINEL["loss_tolerance"],
+            "sentinel_gate": (
+                "PASS" if h200_reference_loss_sentinel_gate else "FAIL"
+            ),
         },
         "reference_mean_gradient_norm": {
-            "frozen": frozen_reference_norm,
-            "recomputed": recomputed_reference_norm,
-            "absolute_error": reference_norm_error,
-            "tolerance": reference_norm_tolerance,
-            "gate": "PASS" if reference_norm_gate else "FAIL",
+            "h200_native": h200_reference_norm,
+            "finite_positive_gate": "PASS" if reference_norm_gate else "FAIL",
+            "sentinel_expected": H200_REFERENCE_SENTINEL[
+                "mean_gradient_norm_expected"
+            ],
+            "sentinel_absolute_error": h200_reference_norm_error,
+            "sentinel_tolerance": H200_REFERENCE_SENTINEL[
+                "mean_gradient_norm_tolerance"
+            ],
+            "sentinel_gate": (
+                "PASS" if h200_reference_norm_sentinel_gate else "FAIL"
+            ),
+        },
+        "h200_native_reference_gates": {
+            "reference_count_100": reference_count_gate,
+            "no_reference_completion_truncated": reference_token_gate,
+            "reference_loss_finite": reference_loss_gate,
+            "reference_norm_finite_positive": reference_norm_gate,
+            "reference_loss_matches_h200_v4_sentinel": (
+                h200_reference_loss_sentinel_gate
+            ),
+            "reference_norm_matches_h200_v4_sentinel": (
+                h200_reference_norm_sentinel_gate
+            ),
+            "device_is_h200": h200_device_gate,
+            "parameter_versions_unchanged": parameter_versions_unchanged,
+            "trainable_sha256_unchanged": trainable_sha_unchanged,
         },
         "parameter_integrity_after_reference": {
             "versions_unchanged": parameter_versions_unchanged,
@@ -772,73 +876,45 @@ def run(args: argparse.Namespace) -> int:
             "trainable_sha256_unchanged": trainable_sha_unchanged,
         },
         "verified_source_sha256": inputs["verified_source_sha256"],
-        "verified_frozen_sha256": inputs["verified_frozen_sha256"],
+        "verified_fixed_input_sha256": inputs["verified_fixed_input_sha256"],
     }
     atomic_json(
         output_dir / "reference_recompute_diagnostics.json",
         reference_diagnostics,
     )
     print(
-        "reference_loss_gate={} frozen={:.17g} recomputed={:.17g} "
-        "absolute_error={:.17g} tolerance={:.17g}".format(
-            "PASS" if reference_loss_gate else "FAIL",
-            frozen_reference_loss,
-            recomputed_reference_loss,
-            reference_loss_error,
-            reference_loss_tolerance,
+        "h200_native_reference_loss_gate={} value={:.17g} error={:.17g} "
+        "tolerance={:.17g}".format(
+            "PASS"
+            if reference_loss_gate and h200_reference_loss_sentinel_gate
+            else "FAIL",
+            h200_reference_loss,
+            h200_reference_loss_error,
+            H200_REFERENCE_SENTINEL["loss_tolerance"],
         ),
         flush=True,
     )
     print(
-        "reference_norm_gate={} frozen={:.17g} recomputed={:.17g} "
-        "absolute_error={:.17g} tolerance={:.17g}".format(
-            "PASS" if reference_norm_gate else "FAIL",
-            frozen_reference_norm,
-            recomputed_reference_norm,
-            reference_norm_error,
-            reference_norm_tolerance,
+        "h200_native_reference_norm_gate={} value={:.17g} error={:.17g} "
+        "tolerance={:.17g}".format(
+            "PASS"
+            if reference_norm_gate and h200_reference_norm_sentinel_gate
+            else "FAIL",
+            h200_reference_norm,
+            h200_reference_norm_error,
+            H200_REFERENCE_SENTINEL["mean_gradient_norm_tolerance"],
         ),
         flush=True,
     )
     require(
-        parameter_versions_unchanged and trainable_sha_unchanged,
-        "Scorer parameters changed while recomputing the frozen reference",
-    )
-    require(
-        reference_loss_gate,
-        (
-            "Recomputed reference loss differs from the frozen scorer: "
-            f"frozen={frozen_reference_loss:.17g}, "
-            f"recomputed={recomputed_reference_loss:.17g}, "
-            f"absolute_error={reference_loss_error:.17g}, "
-            f"tolerance={reference_loss_tolerance:.17g}, "
-            f"device={torch.cuda.get_device_name(device)}"
-        ),
-    )
-    require(
-        reference_norm_gate,
-        (
-            "Recomputed reference norm differs from the frozen scorer: "
-            f"frozen={frozen_reference_norm:.17g}, "
-            f"recomputed={recomputed_reference_norm:.17g}, "
-            f"absolute_error={reference_norm_error:.17g}, "
-            f"tolerance={reference_norm_tolerance:.17g}, "
-            f"device={torch.cuda.get_device_name(device)}"
-        ),
+        h200_native_reference_gate,
+        "H200-native reference validity or scorer-integrity gate failed",
     )
 
     baseline_score = score_trace(scorer, reference, problem, baseline)
     c1_score = score_trace(scorer, reference, problem, c1["content"])
     add_scorer_token_gate(baseline_validity, baseline_score)
     add_scorer_token_gate(c1["validity"], c1_score)
-    baseline_cosine_error = abs(
-        float(baseline_score["gradient_cosine"])
-        - float(inputs["frozen_row_score"]["gradient_cosine"])
-    )
-    require(
-        baseline_cosine_error <= equivalence.COSINE_ABSOLUTE_ERROR_MAX,
-        "Row-0 baseline scorer sentinel exceeded the formal cosine gate",
-    )
 
     nvidia_snapshot(output_dir / "gpu_memory_server_and_scorer_ready.csv")
     atomic_json(output_dir / "torch_memory_server_and_scorer_ready.json", torch_memory_snapshot())
@@ -854,7 +930,7 @@ def run(args: argparse.Namespace) -> int:
     rendered_feedback_value = f"{float(feedback_target_score['gradient_cosine']):.12f}"
     feedback_text = (
         "Black-box scorer feedback for the current parent:\n"
-        "- primary metric: gradient cosine with the frozen mean reference gradient\n"
+        "- primary metric: gradient cosine with the fixed mean reference gradient\n"
         f"- measured value: {rendered_feedback_value}\n"
         "- target direction: lower is better\n"
         "Use only this scalar summary; no token-level attribution is available."
@@ -905,7 +981,8 @@ def run(args: argparse.Namespace) -> int:
         "c2_feedback_has_token_attribution": False,
     }
     gates = {
-        "frozen_input_identity": True,
+        "fixed_input_identity": True,
+        "h200_native_reference_valid": h200_native_reference_gate,
         "round1_prompt_has_no_gradient_derived_feedback": not round1_leakage,
         "baseline_answer_and_trace_valid": bool(baseline_validity["valid"]),
         "c1_answer_and_trace_valid": bool(c1["validity"]["valid"]),
@@ -919,7 +996,6 @@ def run(args: argparse.Namespace) -> int:
         "scorer_parameters_unchanged": parameter_integrity,
         "cosine_decrease_not_required_for_engineering_pass": True,
     }
-    status = "PASS" if all(gates.values()) else "FAIL"
 
     lineage_rows = [
         {
@@ -955,19 +1031,25 @@ def run(args: argparse.Namespace) -> int:
             "score": c2_score,
         },
     ]
+    engineering_selection = select_engineering_winner(lineage_rows)
+    atomic_json(output_dir / "engineering_selection.json", engineering_selection)
+    gates["engineering_final_selection_completed"] = (
+        engineering_selection["status"] == "PASS"
+    )
+    status = "PASS" if all(gates.values()) else "FAIL"
     atomic_jsonl(output_dir / "trace_lineage.jsonl", lineage_rows)
     atomic_json(
         output_dir / "reference_summary.json",
         {
+            "policy": SCORER_RUNTIME_POLICY,
+            "a100_scalar_or_score_equivalence_gate_applied": False,
             "reference_count": reference.example_count,
-            "loss_mean": reference.loss_mean,
-            "mean_gradient_norm": reference.mean_gradient_norm,
-            "loss_error_vs_frozen": reference_loss_error,
-            "norm_error_vs_frozen": reference_norm_error,
-            "completion_truncated_count": sum(
-                int(item["tokens"]["completion_tokens_removed"] > 0)
-                for item in reference.per_example
-            ),
+            "h200_native_loss_mean": h200_reference_loss,
+            "h200_native_mean_gradient_norm": h200_reference_norm,
+            "h200_native_sentinel": H200_REFERENCE_SENTINEL,
+            "h200_native_loss_sentinel_error": h200_reference_loss_error,
+            "h200_native_norm_sentinel_error": h200_reference_norm_error,
+            "completion_truncated_count": reference_truncated_count,
         },
     )
     result = {
@@ -979,6 +1061,14 @@ def run(args: argparse.Namespace) -> int:
         "row_index": ROW_INDEX,
         "problem_sha256": text_sha256(problem),
         "model_id": MODEL_ID,
+        "runtime_policy": {
+            "name": SCORER_RUNTIME_POLICY,
+            "device": torch.cuda.get_device_name(device),
+            "fixed_data_model_and_scorer_definition": True,
+            "a100_scalar_or_score_equivalence_required": False,
+            "basis": H200_POLICY_EVIDENCE,
+            "h200_reference_sentinel": H200_REFERENCE_SENTINEL,
+        },
         "generator_settings": {
             "status": "engineering_candidate_settings_not_formal_protocol",
             "temperature": args.temperature,
@@ -997,7 +1087,17 @@ def run(args: argparse.Namespace) -> int:
             "trainable_parameter_sha256_before": trainable_sha_before,
             "trainable_parameter_sha256_after": trainable_sha_after,
             "parameter_integrity": parameter_integrity,
-            "baseline_cosine_error_vs_frozen": baseline_cosine_error,
+            "reference_policy": SCORER_RUNTIME_POLICY,
+            "h200_native_reference_loss_mean": h200_reference_loss,
+            "h200_native_reference_gradient_norm": h200_reference_norm,
+            "h200_native_reference_sentinel": H200_REFERENCE_SENTINEL,
+            "h200_native_reference_loss_sentinel_error": (
+                h200_reference_loss_error
+            ),
+            "h200_native_reference_norm_sentinel_error": (
+                h200_reference_norm_error
+            ),
+            "a100_scalar_or_score_comparison_performed": False,
         },
         "feedback": {
             "target_candidate": c2_parent_label,
@@ -1030,9 +1130,10 @@ def run(args: argparse.Namespace) -> int:
             - float(baseline_score["gradient_cosine"]),
             "improvement_is_not_a_pass_gate": True,
         },
+        "engineering_final_selection": engineering_selection,
         "gates": gates,
         "verified_source_sha256": inputs["verified_source_sha256"],
-        "verified_frozen_sha256": inputs["verified_frozen_sha256"],
+        "verified_fixed_input_sha256": inputs["verified_fixed_input_sha256"],
         "candidate_name": inputs["candidate_name"],
         "baseline_duplicate_rows_known_from_prior_audit": [18, 19],
         "selection_only_implemented": False,

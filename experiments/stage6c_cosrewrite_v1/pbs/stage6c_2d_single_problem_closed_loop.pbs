@@ -1,14 +1,14 @@
 #!/bin/bash
-#PBS -N tr-s6c-loop-v5
-#PBS -l select=1:ncpus=8:ngpus=1:mem=32gb:gpu_model=H200
-#PBS -l walltime=01:00:00
+#PBS -N tr-s6c-loop-v6
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:gpu_model=H200
+#PBS -l walltime=00:30:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-loop-v5.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-loop-v6.pbs.log
 
 set -euo pipefail
 umask 077
 
-METHOD="stage6c_2d_single_problem_closed_loop_v5_h200_native"
+METHOD="stage6c_2d_single_problem_closed_loop_v6_h200_native"
 REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 DRIVER_REL="experiments/stage6c_cosrewrite_v1/run_single_problem_closed_loop.py"
 PBS_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2d_single_problem_closed_loop.pbs"
@@ -30,7 +30,7 @@ H200_POLICY_RESULT="$RESULT_ROOT/h200_scorer_equivalence_v4_9010570"
 : "${EXPECTED_EXECUTION_COMMIT:?Pass EXPECTED_EXECUTION_COMMIT with qsub -v}"
 
 JOB_NUMBER="${PBS_JOBID%%.*}"
-OUT_DIR="$RESULT_ROOT/gptoss_qwen_single_problem_loop_v5_${JOB_NUMBER}"
+OUT_DIR="$RESULT_ROOT/gptoss_qwen_single_problem_loop_v6_${JOB_NUMBER}"
 SERVER_LOG="$OUT_DIR/vllm_server.log"
 SERVER_PID=""
 SUCCESS=0
@@ -364,7 +364,12 @@ runtime_policy = result.get("runtime_policy", {})
 if runtime_policy.get("name") != "h200_native_v1":
     raise SystemExit("unexpected scorer runtime policy")
 if runtime_policy.get("a100_scalar_or_score_equivalence_required") is not False:
-    raise SystemExit("A100 score equivalence unexpectedly remains a v5 gate")
+    raise SystemExit("A100 score equivalence unexpectedly remains a v6 gate")
+repetition_policy = result.get("trace_repetition_validation", {})
+if repetition_policy.get("name") != "unicode_alphanumeric_window_v1":
+    raise SystemExit("unexpected trace repetition validation policy")
+if repetition_policy.get("regression_status") != "PASS":
+    raise SystemExit("trace repetition validator regression did not PASS")
 selection = result.get("engineering_final_selection", {})
 if selection.get("status") != "PASS" or not selection.get("winner_candidate_id"):
     raise SystemExit("engineering final selection did not complete")
@@ -389,6 +394,8 @@ PY
     echo "reference_count=100"
     echo "scorer_runtime_policy=h200_native_v1"
     echo "a100_score_equivalence_required=false"
+    echo "trace_repetition_policy=unicode_alphanumeric_window_v1"
+    echo "trace_repetition_validator_regression=true"
     echo "model_loaded=true"
     echo "api_tested=true"
     echo "scorer_loaded=true"

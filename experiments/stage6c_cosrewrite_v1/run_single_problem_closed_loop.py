@@ -1,4 +1,4 @@
-"""Run the Stage 6C.2d v5 H200-native CosRewrite engineering preflight."""
+"""Run the Stage 6C.2d v6 H200-native CosRewrite engineering preflight."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer
 from optimize.score_candidates import _load_training_tokenizer
 
 
-METHOD = "stage6c_2d_single_problem_closed_loop_v5_h200_native"
+METHOD = "stage6c_2d_single_problem_closed_loop_v6_h200_native"
 CLAIM_BOUNDARY = (
     "H200-native engineering preflight only: no executable formal-protocol "
     "lock, no SelectionOnly comparison, no method-effect claim, and no "
@@ -68,6 +68,14 @@ H200_POLICY_EVIDENCE = {
     "reference_sentinel_source": "v4_h200_repeat_1_with_locked_repeat_tolerances",
 }
 ENGINEERING_SELECTION_PRIORITY = ("BaselineRewrite", "C1", "C2")
+REPETITION_VALIDATION_POLICY = {
+    "name": "unicode_alphanumeric_window_v1",
+    "window_size": 8,
+    "maximum_window_count": 2,
+    "latex_punctuation_ignored": True,
+    "v5_diagnostic_job_id": "9032662.kman.restech.unsw.edu.au",
+    "v5_failure_reason": "latex_punctuation_false_positive",
+}
 EXPECTED_SOURCE_SHA256 = {
     "gradient_feedback": "ce1b8f89876b3460ece5aff3ff01e78dc31dc3bc37d8fdc3b2e8edf9770db951",
     "score_candidates": "2035787b8b7d4e64ff166893cebabcf506facef3c449fcc7a7f927c514596c67",
@@ -207,12 +215,94 @@ def answer_correct(solution: str, trace: str) -> tuple[bool, str | None]:
         return False, f"{type(error).__name__}: {error}"
 
 
+def lexical_repetition_tokens(text: str) -> list[str]:
+    """Return case-folded Unicode alphanumeric tokens, excluding underscores.
+
+    LaTeX punctuation and grouping syntax are deliberately ignored so repeated
+    formatting constructs are not mistaken for repeated natural-language or
+    mathematical content.
+    """
+
+    return re.findall(r"[^\W_]+", text.casefold())
+
+
+def repeated_window_diagnostics(text: str, size: int = 8) -> dict[str, Any]:
+    tokens = lexical_repetition_tokens(text)
+    if len(tokens) < size:
+        return {
+            "token_count": len(tokens),
+            "maximum_window_count": 1,
+            "maximum_window_examples": [],
+        }
+    windows = Counter(
+        tuple(tokens[index : index + size])
+        for index in range(len(tokens) - size + 1)
+    )
+    maximum_count = max(windows.values(), default=1)
+    maximum_examples = [
+        {"tokens": list(window), "count": count}
+        for window, count in windows.items()
+        if count == maximum_count and count > 1
+    ][:5]
+    return {
+        "token_count": len(tokens),
+        "maximum_window_count": maximum_count,
+        "maximum_window_examples": maximum_examples,
+    }
+
+
 def repeated_window_count(text: str, size: int = 8) -> int:
+    return int(repeated_window_diagnostics(text, size)["maximum_window_count"])
+
+
+def legacy_punctuation_window_count(text: str, size: int = 8) -> int:
+    """Reproduce the v5 tokenizer only for the regression audit."""
+
     tokens = re.findall(r"\w+|[^\w\s]", text.casefold())
     if len(tokens) < size:
         return 1
-    windows = Counter(tuple(tokens[index : index + size]) for index in range(len(tokens) - size + 1))
+    windows = Counter(
+        tuple(tokens[index : index + size])
+        for index in range(len(tokens) - size + 1)
+    )
     return max(windows.values(), default=1)
+
+
+def repetition_validator_regression() -> dict[str, Any]:
+    latex_fixture = (
+        r"First \(\tau_{\text{Apr}}\), then \(\tau_{\text{May}}\), "
+        r"and finally \(\tau_{\text{June}}\)."
+    )
+    repeated_phrase = "repeat this exact phrase without adding any progress"
+    degeneration_fixture = " ".join([repeated_phrase] * 3)
+    legacy_latex_count = legacy_punctuation_window_count(latex_fixture)
+    lexical_latex_count = repeated_window_count(latex_fixture)
+    lexical_degeneration_count = repeated_window_count(degeneration_fixture)
+    maximum_allowed = int(
+        TRACE_THRESHOLDS["maximum_repeated_eight_token_window_count"]
+    )
+    status = "PASS" if all(
+        (
+            REPETITION_VALIDATION_POLICY["maximum_window_count"]
+            == maximum_allowed,
+            legacy_latex_count > maximum_allowed,
+            lexical_latex_count <= maximum_allowed,
+            lexical_degeneration_count > maximum_allowed,
+        )
+    ) else "FAIL"
+    return {
+        "status": status,
+        "policy": REPETITION_VALIDATION_POLICY,
+        "latex_fixture": {
+            "legacy_punctuation_window_count": legacy_latex_count,
+            "lexical_window_count": lexical_latex_count,
+            "expected_valid": True,
+        },
+        "degeneration_fixture": {
+            "lexical_window_count": lexical_degeneration_count,
+            "expected_valid": False,
+        },
+    }
 
 
 def validate_trace(
@@ -228,7 +318,8 @@ def validate_trace(
     nonempty_lines = [line.strip().casefold() for line in stripped.splitlines() if line.strip()]
     line_counts = Counter(line for line in nonempty_lines if len(line) >= 12)
     maximum_line_count = max(line_counts.values(), default=1)
-    maximum_window_count = repeated_window_count(stripped)
+    repetition_diagnostics = repeated_window_diagnostics(stripped)
+    maximum_window_count = int(repetition_diagnostics["maximum_window_count"])
     normalized = normalize_text(stripped)
     duplicate_of = [label for label, parent in parents.items() if normalized == normalize_text(parent)]
     leakage = [term for term in LEAKAGE_TERMS if term in normalized]
@@ -276,6 +367,11 @@ def validate_trace(
         "has_reasoning_marker": has_reasoning_marker,
         "maximum_identical_nonempty_line_count": maximum_line_count,
         "maximum_repeated_eight_token_window_count": maximum_window_count,
+        "repetition_tokenization_policy": REPETITION_VALIDATION_POLICY["name"],
+        "repetition_lexical_token_count": repetition_diagnostics["token_count"],
+        "maximum_repeated_eight_token_window_examples": (
+            repetition_diagnostics["maximum_window_examples"]
+        ),
         "duplicate_of": duplicate_of,
         "leakage_terms": leakage,
         "finish_reason": finish_reason,
@@ -527,7 +623,7 @@ def load_inputs(repo_root: Path) -> dict[str, Any]:
     reference_path = stage6b_root / "frozen_data/gradient_reference.jsonl"
     reference_manifest_path = stage6b_root / "frozen_data/gradient_reference_manifest.json"
 
-    # These hashes retain the fixed data/model/scorer definition.  V5 does not
+    # These hashes retain the fixed data/model/scorer definition.  V6 does not
     # load or gate on any scalar or candidate score computed on the A100.
     fixed_input_paths = {
         "method_lock": method_lock_path,
@@ -653,6 +749,40 @@ def run(args: argparse.Namespace) -> int:
         parents={},
         finish_reason=None,
     )
+    repetition_regression = repetition_validator_regression()
+    fixed_baseline_repetition_gate = (
+        baseline_validity["maximum_repeated_eight_token_window_count"]
+        <= TRACE_THRESHOLDS["maximum_repeated_eight_token_window_count"]
+    )
+    repetition_validation_audit = {
+        "name": REPETITION_VALIDATION_POLICY["name"],
+        "regression_status": repetition_regression["status"],
+        "policy": REPETITION_VALIDATION_POLICY,
+        "regression": repetition_regression,
+        "fixed_baseline": {
+            "trace_sha256": text_sha256(baseline),
+            "maximum_window_count": baseline_validity[
+                "maximum_repeated_eight_token_window_count"
+            ],
+            "maximum_allowed": TRACE_THRESHOLDS[
+                "maximum_repeated_eight_token_window_count"
+            ],
+            "gate": fixed_baseline_repetition_gate,
+        },
+    }
+    atomic_json(
+        output_dir / "trace_repetition_validation.json",
+        repetition_validation_audit,
+    )
+    require(
+        repetition_regression["status"] == "PASS",
+        "Trace repetition validator regression failed",
+    )
+    require(
+        fixed_baseline_repetition_gate,
+        "Fixed BaselineRewrite failed the lexical repetition gate",
+    )
+    print("trace_repetition_validator_regression_gate=PASS", flush=True)
 
     model_list = get_json(f"{args.api_base_url.rstrip('/')}/models")
     atomic_json(api_dir / "model_list.json", model_list)
@@ -984,6 +1114,9 @@ def run(args: argparse.Namespace) -> int:
         "fixed_input_identity": True,
         "h200_native_reference_valid": h200_native_reference_gate,
         "round1_prompt_has_no_gradient_derived_feedback": not round1_leakage,
+        "trace_repetition_validator_regression": (
+            repetition_regression["status"] == "PASS"
+        ),
         "baseline_answer_and_trace_valid": bool(baseline_validity["valid"]),
         "c1_answer_and_trace_valid": bool(c1["validity"]["valid"]),
         "c1_scored_by_frozen_qwen": True,
@@ -1069,6 +1202,7 @@ def run(args: argparse.Namespace) -> int:
             "basis": H200_POLICY_EVIDENCE,
             "h200_reference_sentinel": H200_REFERENCE_SENTINEL,
         },
+        "trace_repetition_validation": repetition_validation_audit,
         "generator_settings": {
             "status": "engineering_candidate_settings_not_formal_protocol",
             "temperature": args.temperature,

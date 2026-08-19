@@ -1,4 +1,32 @@
 {
+  "baseline_eligibility": {
+    "candidate_count": 100,
+    "field": "rewrite_trace",
+    "first_ten_valid_row_indices": [
+      0,
+      1,
+      2,
+      6,
+      9,
+      10,
+      12,
+      20,
+      21,
+      27
+    ],
+    "invalid_count": 81,
+    "invalid_reason_counts": {
+      "answer_only_or_too_short_words": 78,
+      "gold_answer_mismatch_or_unparseable": 24,
+      "no_reasoning_marker": 74,
+      "too_few_numeric_tokens": 71,
+      "too_short_characters": 77
+    },
+    "selection_uses_cosine_or_generation_results": false,
+    "stage": "valid_before_scorer_token_gate",
+    "valid_count": 19,
+    "validator": "stage6c_2d_v6_unicode_alphanumeric_trace_validator"
+  },
   "checkpoint": {
     "atomic_problem_markers": true,
     "resume_requires_same_execution_commit": true,
@@ -18,10 +46,10 @@
       0,
       1,
       2,
-      3,
-      4
+      6,
+      9
     ],
-    "selection": "first_five_rows_of_frozen_candidate_dataset_not_cherry_picked"
+    "selection": "first_five_dataset_order_rows_passing_locked_baseline_validity"
   },
   "controller": {
     "c1_parent": "BaselineRewrite",
@@ -35,7 +63,21 @@
     "h200_runtime_policy": "h200_native_v1",
     "stage6c_2d_v6_execution_commit": "a70c9e65fcd5165a4c0b0e4f10d7e59fc90cd742",
     "stage6c_2d_v6_job_id": "9033138.kman.restech.unsw.edu.au",
-    "stage6c_2d_v6_status": "PASS"
+    "stage6c_2d_v6_status": "PASS",
+    "stage6c_2e_v1_batch_result_sha256": "c4b68bbc3109c16de5b868ee68d63c51f24478c7fb0c2250a140067f77b729c5",
+    "stage6c_2e_v1_complete_row_indices": [
+      0,
+      1,
+      2
+    ],
+    "stage6c_2e_v1_execution_commit": "6a3290f6cbb517b078ebbee29efaede3954c2562",
+    "stage6c_2e_v1_failed_row_indices": [
+      3,
+      4
+    ],
+    "stage6c_2e_v1_failure_class": "locked_baseline_answer_only_validity_gate",
+    "stage6c_2e_v1_job_id": "9037482.kman.restech.unsw.edu.au",
+    "stage6c_2e_v1_status": "FAIL_EXPECTED_DATA_GATE"
   },
   "generator": {
     "maximum_generation_attempts": 2,
@@ -44,7 +86,7 @@
     "reasoning_effort": "medium",
     "temperature": 0.6
   },
-  "method": "stage6c_2e_five_problem_batch_preflight_v1_h200_native",
+  "method": "stage6c_2e_five_valid_problem_batch_preflight_v2_h200_native",
   "resources": {
     "cpus": 8,
     "gpus": 1,
@@ -52,7 +94,7 @@
     "pbs_walltime": "00:30:00",
     "requested_gpu_model": "H200"
   },
-  "schema": "stage6c_2e_batch_preflight_lock_v1",
+  "schema": "stage6c_2e_batch_preflight_lock_v2",
   "scope": "engineering_multi_problem_batch_and_resource_preflight_only",
   "scorer": {
     "a100_scalar_or_score_equivalence_required": false,

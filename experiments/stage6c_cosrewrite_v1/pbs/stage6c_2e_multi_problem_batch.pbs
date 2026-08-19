@@ -1,21 +1,21 @@
 #!/bin/bash
-#PBS -N tr-s6c-batch-2e
+#PBS -N tr-s6c-batch-2e-v2
 #PBS -l select=1:ncpus=8:ngpus=1:mem=128gb:gpu_model=H200
 #PBS -l walltime=00:30:00
 #PBS -j oe
-#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-batch-2e-v1.pbs.log
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c-batch-2e-v2.pbs.log
 
 set -euo pipefail
 umask 077
 
-METHOD="stage6c_2e_five_problem_batch_preflight_v1_h200_native"
+METHOD="stage6c_2e_five_valid_problem_batch_preflight_v2_h200_native"
 REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
 DRIVER_REL="experiments/stage6c_cosrewrite_v1/run_multi_problem_batch.py"
 SINGLE_DRIVER_REL="experiments/stage6c_cosrewrite_v1/run_single_problem_closed_loop.py"
 LOCK_REL="experiments/stage6c_cosrewrite_v1/config/stage6c_2e_batch_preflight_lock.json"
 PBS_REL="experiments/stage6c_cosrewrite_v1/pbs/stage6c_2e_multi_problem_batch.pbs"
 EXPECTED_SINGLE_DRIVER_SHA256="345bf8977eb0f5be76b0690167c5d5cb9177a958381ce06584c2a9777b4d2aa0"
-EXPECTED_LOCK_SHA256="5f5a0dd4f46f71e002140d722d1896ac4d130d5e9cd3faa238437dd36e8bef35"
+EXPECTED_LOCK_SHA256="b068cfaf597b8daeacd5fb367b543ad50dfa00eacc6529c1c4826cbdfeb91f84"
 ENV_ROOT="/srv/scratch/z5463756/honour/envs/trace-rewriting-official"
 HONOUR_ROOT="/srv/scratch/z5463756/honour"
 RESULT_ROOT="$HONOUR_ROOT/results/stage6c-cosrewrite-qwen3-1.7b-v1/backend_preflight"
@@ -29,13 +29,14 @@ SNAPSHOT_RESULT="$RESULT_ROOT/gptoss_snapshot_download_8990062"
 CONTAINER_RESULT="$RESULT_ROOT/vllm_container_acquire_8994052"
 API_PREFLIGHT_RESULT="$RESULT_ROOT/gptoss_h200_container_api_8995484"
 STAGE6C_2D_RESULT="$RESULT_ROOT/gptoss_qwen_single_problem_loop_v6_9033138"
+STAGE6C_2E_V1_RESULT="$RESULT_ROOT/gptoss_qwen_five_problem_batch_2e_v1_9037482"
 RESUME_FROM="${RESUME_FROM:-}"
 
 : "${PBS_JOBID:?PBS_JOBID is required}"
 : "${EXPECTED_EXECUTION_COMMIT:?Pass EXPECTED_EXECUTION_COMMIT with qsub -v}"
 
 JOB_NUMBER="${PBS_JOBID%%.*}"
-OUT_DIR="$RESULT_ROOT/gptoss_qwen_five_problem_batch_2e_v1_${JOB_NUMBER}"
+OUT_DIR="$RESULT_ROOT/gptoss_qwen_five_valid_problem_batch_2e_v2_${JOB_NUMBER}"
 SERVER_LOG="$OUT_DIR/vllm_server.log"
 SERVER_PID=""
 SUCCESS=0
@@ -127,7 +128,7 @@ test -f "$SIF"
 test -d "$SNAPSHOT"
 if [[ -n "$RESUME_FROM" ]]; then
     test -d "$RESUME_FROM"
-    [[ "$RESUME_FROM" == "$RESULT_ROOT"/gptoss_qwen_five_problem_batch_2e_v1_* ]]
+    [[ "$RESUME_FROM" == "$RESULT_ROOT"/gptoss_qwen_five_valid_problem_batch_2e_v2_* ]]
 fi
 
 ACTUAL_HEAD="$(git rev-parse HEAD)"
@@ -204,6 +205,114 @@ output.write_text(
     encoding="utf-8",
 )
 print("stage6c_2d_v6_dependency_gate=PASS")
+PY
+
+test -f "$STAGE6C_2E_V1_RESULT/FAILED"
+test ! -e "$STAGE6C_2E_V1_RESULT/COMPLETE"
+"$ENV_ROOT/bin/python" - \
+    "$STAGE6C_2E_V1_RESULT" \
+    "$OUT_DIR/provenance/stage6c_2e_v1_dependency.json" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+output = Path(sys.argv[2])
+marker = dict(
+    line.split("=", 1)
+    for line in (root / "FAILED").read_text(encoding="utf-8").splitlines()
+    if "=" in line
+)
+result_path = root / "batch_result.json"
+result = json.loads(result_path.read_text(encoding="utf-8"))
+expected_commit = "6a3290f6cbb517b078ebbee29efaede3954c2562"
+expected_method = "stage6c_2e_five_problem_batch_preflight_v1_h200_native"
+expected_result_sha256 = "c4b68bbc3109c16de5b868ee68d63c51f24478c7fb0c2250a140067f77b729c5"
+expected_reasons = [
+    "too_short_characters",
+    "answer_only_or_too_short_words",
+    "too_few_numeric_tokens",
+    "no_reasoning_marker",
+]
+if (
+    marker.get("status") != "FAIL"
+    or marker.get("method") != expected_method
+    or marker.get("job_id") != "9037482.kman.restech.unsw.edu.au"
+    or marker.get("commit") != expected_commit
+    or marker.get("exit_code") != "1"
+    or marker.get("complete_present") != "false"
+):
+    raise SystemExit("Stage 6C.2e v1 failure marker mismatch")
+actual_result_sha256 = hashlib.sha256(result_path.read_bytes()).hexdigest()
+if actual_result_sha256 != expected_result_sha256:
+    raise SystemExit("Stage 6C.2e v1 batch-result SHA256 mismatch")
+if result.get("status") != "FAIL" or result.get("method") != expected_method:
+    raise SystemExit("Stage 6C.2e v1 result identity mismatch")
+if result.get("execution_commit") != expected_commit:
+    raise SystemExit("Stage 6C.2e v1 result commit mismatch")
+if result.get("row_indices") != [0, 1, 2, 3, 4]:
+    raise SystemExit("Stage 6C.2e v1 row cohort mismatch")
+if result.get("passed_problem_count") != 3 or result.get("failed_problem_count") != 2:
+    raise SystemExit("Stage 6C.2e v1 pass/fail counts changed")
+for gate in (
+    "batch_regression",
+    "h200_native_reference_valid",
+    "scorer_parameters_unchanged",
+):
+    if result.get("gates", {}).get(gate) is not True:
+        raise SystemExit(f"Stage 6C.2e v1 prerequisite gate failed: {gate}")
+if result.get("reference", {}).get("mean_reference_gradient_recomputations") != 1:
+    raise SystemExit("Stage 6C.2e v1 reference recomputation count changed")
+if result.get("checkpoint_audit", {}).get("validated_row_indices") != [0, 1, 2]:
+    raise SystemExit("Stage 6C.2e v1 completed-checkpoint inventory changed")
+
+invalid_baselines = []
+for row_index in (3, 4):
+    lineage_path = root / "problems" / f"row_{row_index:04d}" / "trace_lineage.jsonl"
+    lineage = [
+        json.loads(line)
+        for line in lineage_path.read_text(encoding="utf-8").splitlines()
+    ]
+    baseline = next(row for row in lineage if row["candidate_id"] == "BaselineRewrite")
+    validity = baseline["validity"]
+    if validity.get("answer_correct") is not True:
+        raise SystemExit(f"Stage 6C.2e v1 row {row_index} baseline answer changed")
+    if validity.get("reasons") != expected_reasons:
+        raise SystemExit(f"Stage 6C.2e v1 row {row_index} validity reasons changed")
+    if any(
+        row["validity"].get("valid") is not True
+        for row in lineage
+        if row["candidate_id"] in {"C1", "C2"}
+    ):
+        raise SystemExit(f"Stage 6C.2e v1 row {row_index} generated candidate invalid")
+    invalid_baselines.append(
+        {
+            "row_index": row_index,
+            "trace": baseline["trace"],
+            "trace_sha256": baseline["trace_sha256"],
+            "answer_correct": True,
+            "reasons": expected_reasons,
+        }
+    )
+
+evidence = {
+    "status": "PASS",
+    "evidence_role": "expected_v1_data_gate_failure_supporting_v2_cohort_correction",
+    "method": expected_method,
+    "job_id": result["job_id"],
+    "execution_commit": expected_commit,
+    "batch_result_sha256": actual_result_sha256,
+    "completed_row_indices": [0, 1, 2],
+    "failed_row_indices": [3, 4],
+    "failure_class": "locked_baseline_answer_only_validity_gate",
+    "invalid_baselines": invalid_baselines,
+}
+output.write_text(
+    json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+print("stage6c_2e_v1_dependency_gate=PASS")
 PY
 
 ACTUAL_SIF_SHA256="$(sha256sum "$SIF" | awk '{print $1}')"
@@ -387,7 +496,7 @@ if result.get("status") != "PASS":
     raise SystemExit("batch_result status is not PASS")
 if not all(result.get("gates", {}).values()):
     raise SystemExit("one or more batch gates failed")
-if result.get("row_indices") != [0, 1, 2, 3, 4]:
+if result.get("row_indices") != [0, 1, 2, 6, 9]:
     raise SystemExit("unexpected formal-scale preflight row indices")
 if result.get("problem_count") != 5 or result.get("passed_problem_count") != 5:
     raise SystemExit("not all five preflight problems passed")
@@ -397,6 +506,15 @@ if result.get("reference", {}).get("mean_reference_gradient_recomputations") != 
     raise SystemExit("reference gradient was not shared exactly once")
 if result.get("reference", {}).get("scorer_runtime_policy") != "h200_native_v1":
     raise SystemExit("unexpected scorer runtime policy")
+eligibility = result.get("baseline_eligibility", {})
+if eligibility.get("status") != "PASS":
+    raise SystemExit("baseline eligibility audit did not PASS")
+if eligibility.get("selected_row_indices") != [0, 1, 2, 6, 9]:
+    raise SystemExit("baseline eligibility selected cohort mismatch")
+if eligibility.get("valid_count") != 19 or eligibility.get("invalid_count") != 81:
+    raise SystemExit("baseline eligibility counts changed")
+if eligibility.get("selection_uses_cosine_or_generation_results") is not False:
+    raise SystemExit("baseline eligibility unexpectedly used method outcomes")
 if result.get("selection_only_implemented") is not False:
     raise SystemExit("unexpected SelectionOnly claim")
 if result.get("formal_protocol_locked") is not False:
@@ -407,7 +525,7 @@ if result.get("student_trained") is not False or result.get("af_measured") is no
     raise SystemExit("unexpected downstream-result claim")
 if result.get("scientific_result") is not False:
     raise SystemExit("6C.2e was mislabeled as a scientific result")
-for row_index in range(5):
+for row_index in (0, 1, 2, 6, 9):
     problem_dir = root / "problems" / f"row_{row_index:04d}"
     if not (problem_dir / "PROBLEM_COMPLETE").is_file():
         raise SystemExit(f"row {row_index} has no PROBLEM_COMPLETE marker")
@@ -424,8 +542,13 @@ PY
     echo "model_id=$MODEL_ID"
     echo "model_revision=b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
     echo "container_sha256=$EXPECTED_SIF_SHA256"
-    echo "row_indices=0,1,2,3,4"
+    echo "row_indices=0,1,2,6,9"
     echo "problem_count=5"
+    echo "baseline_valid_before_scorer_count=19"
+    echo "baseline_invalid_before_scorer_count=81"
+    echo "cohort_selection=first_five_dataset_order_baseline_valid_rows"
+    echo "cohort_selection_uses_method_outcomes=false"
+    echo "v1_diagnostic_job_id=9037482.kman.restech.unsw.edu.au"
     echo "reference_count=100"
     echo "mean_reference_gradient_recomputations=1"
     echo "scorer_runtime_policy=h200_native_v1"
@@ -447,5 +570,5 @@ PY
 mv "$OUT_DIR/COMPLETE.partial" "$OUT_DIR/COMPLETE"
 SUCCESS=1
 
-echo "PASS: Stage 6C.2e five-problem H200 batch preflight completed"
+echo "PASS: Stage 6C.2e five-valid-problem H200 batch preflight v2 completed"
 echo "out_dir: $OUT_DIR"

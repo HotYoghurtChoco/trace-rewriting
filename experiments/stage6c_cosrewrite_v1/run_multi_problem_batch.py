@@ -1,4 +1,4 @@
-"""Run the Stage 6C.2e five-problem H200 engineering batch preflight."""
+"""Run the Stage 6C.2e five-baseline-valid-problem H200 batch preflight."""
 
 from __future__ import annotations
 
@@ -41,14 +41,15 @@ from optimize.gradient_feedback import CompletionOnlyGradientScorer  # noqa: E40
 from optimize.score_candidates import _load_training_tokenizer  # noqa: E402
 
 
-METHOD = "stage6c_2e_five_problem_batch_preflight_v1_h200_native"
+METHOD = "stage6c_2e_five_valid_problem_batch_preflight_v2_h200_native"
 CLAIM_BOUNDARY = (
-    "Engineering five-problem batch and resource preflight only: no formal "
+    "Engineering five-baseline-valid-problem batch and resource preflight "
+    "only: no formal "
     "protocol lock, no SelectionOnly implementation, no formal rewrite "
     "dataset, no method-effect claim, and no student/AF result."
 )
-SCHEMA = "stage6c_2e_five_problem_batch_result_v1"
-ROW_INDICES = (0, 1, 2, 3, 4)
+SCHEMA = "stage6c_2e_five_valid_problem_batch_result_v2"
+ROW_INDICES = (0, 1, 2, 6, 9)
 PROBLEM_GATE_NAMES = (
     "fixed_input_identity",
     "locked_row_index",
@@ -74,7 +75,7 @@ SINGLE_DRIVER_REL = (
     "experiments/stage6c_cosrewrite_v1/run_single_problem_closed_loop.py"
 )
 EXPECTED_LOCK_SHA256 = (
-    "5f5a0dd4f46f71e002140d722d1896ac4d130d5e9cd3faa238437dd36e8bef35"
+    "b068cfaf597b8daeacd5fb367b543ad50dfa00eacc6529c1c4826cbdfeb91f84"
 )
 EXPECTED_SINGLE_DRIVER_SHA256 = (
     "345bf8977eb0f5be76b0690167c5d5cb9177a958381ce06584c2a9777b4d2aa0"
@@ -133,10 +134,19 @@ def load_and_validate_lock(repo_root: Path, args: argparse.Namespace) -> dict[st
         f"Unexpected Stage 6C.2e lock SHA256: {actual_sha256}",
     )
     lock = read_json(path)
+    single.require(
+        lock.get("schema") == "stage6c_2e_batch_preflight_lock_v2",
+        "Unexpected Stage 6C.2e lock schema",
+    )
     single.require(lock.get("method") == METHOD, "Unexpected method in 6C.2e lock")
     single.require(
         tuple(lock.get("cohort", {}).get("row_indices", [])) == ROW_INDICES,
         "Unexpected fixed cohort in 6C.2e lock",
+    )
+    single.require(
+        lock.get("cohort", {}).get("selection")
+        == "first_five_dataset_order_rows_passing_locked_baseline_validity",
+        "Unexpected baseline-valid cohort selection policy",
     )
     generator = lock.get("generator", {})
     single.require(
@@ -163,6 +173,23 @@ def load_and_validate_lock(repo_root: Path, args: argparse.Namespace) -> dict[st
     single.require(
         lock.get("claim_boundary", {}).get("method_effect_claimed") is False,
         "6C.2e unexpectedly claims a method effect",
+    )
+    eligibility = lock.get("baseline_eligibility", {})
+    single.require(
+        int(eligibility.get("candidate_count", -1)) == 100,
+        "Unexpected candidate count in baseline-eligibility lock",
+    )
+    single.require(
+        int(eligibility.get("valid_count", -1)) == 19,
+        "Unexpected valid baseline count in 6C.2e lock",
+    )
+    single.require(
+        int(eligibility.get("invalid_count", -1)) == 81,
+        "Unexpected invalid baseline count in 6C.2e lock",
+    )
+    single.require(
+        eligibility.get("selection_uses_cosine_or_generation_results") is False,
+        "6C.2e cohort selection unexpectedly uses method outcomes",
     )
     return lock
 
@@ -195,6 +222,18 @@ def batch_regression(lock: Mapping[str, Any], scoring_seed: int) -> dict[str, An
             lock.get("cohort", {}).get("row_indices", [])
         )
         == ROW_INDICES,
+        "lock_rows_match_first_five_valid_scan": tuple(
+            lock.get("baseline_eligibility", {}).get(
+                "first_ten_valid_row_indices",
+                [],
+            )[:5]
+        )
+        == ROW_INDICES,
+        "cohort_selection_is_outcome_independent": lock.get(
+            "baseline_eligibility",
+            {},
+        ).get("selection_uses_cosine_or_generation_results")
+        is False,
         "ten_unique_generation_seeds": len(set(seeds.values())) == 10,
         "row_zero_c1_seed_matches_v6": seeds["row_0000_c1"]
         == scoring_seed * 1000 + 1,
@@ -207,6 +246,77 @@ def batch_regression(lock: Mapping[str, Any], scoring_seed: int) -> dict[str, An
         "gates": gates,
         "generation_seeds": seeds,
         "trace_repetition_regression": repetition,
+    }
+
+
+def baseline_eligibility_audit(
+    candidate_rows: Sequence[Mapping[str, Any]],
+    lock: Mapping[str, Any],
+) -> dict[str, Any]:
+    eligible_row_indices = []
+    invalid_rows = []
+    reason_counts: Counter[str] = Counter()
+    for row_index, row in enumerate(candidate_rows):
+        validity = single.validate_trace(
+            solution=str(row["solution"]),
+            trace=str(row["rewrite_trace"]),
+            parents={},
+            finish_reason=None,
+        )
+        if bool(validity["valid_before_scorer_token_gate"]):
+            eligible_row_indices.append(row_index)
+            continue
+        reasons = list(validity["reasons"])
+        reason_counts.update(reasons)
+        invalid_rows.append(
+            {
+                "row_index": row_index,
+                "rewrite_trace_sha256": single.text_sha256(
+                    str(row["rewrite_trace"])
+                ),
+                "answer_correct": bool(validity["answer_correct"]),
+                "reasons": reasons,
+            }
+        )
+
+    expected = lock["baseline_eligibility"]
+    actual_reason_counts = dict(sorted(reason_counts.items()))
+    first_five = eligible_row_indices[:5]
+    first_ten = eligible_row_indices[:10]
+    gates = {
+        "candidate_count_matches_lock": len(candidate_rows)
+        == int(expected["candidate_count"]),
+        "valid_count_matches_lock": len(eligible_row_indices)
+        == int(expected["valid_count"]),
+        "invalid_count_matches_lock": len(invalid_rows)
+        == int(expected["invalid_count"]),
+        "invalid_reason_counts_match_lock": actual_reason_counts
+        == expected["invalid_reason_counts"],
+        "first_five_valid_rows_match_locked_cohort": tuple(first_five)
+        == ROW_INDICES,
+        "first_ten_valid_rows_match_lock": first_ten
+        == list(expected["first_ten_valid_row_indices"]),
+        "cohort_selection_independent_of_method_outcomes": expected[
+            "selection_uses_cosine_or_generation_results"
+        ]
+        is False,
+    }
+    return {
+        "schema": "stage6c_2e_baseline_eligibility_audit_v2",
+        "status": "PASS" if all(gates.values()) else "FAIL",
+        "method": METHOD,
+        "selection_policy": lock["cohort"]["selection"],
+        "selection_stage": expected["stage"],
+        "selection_uses_cosine_or_generation_results": False,
+        "candidate_count": len(candidate_rows),
+        "valid_count": len(eligible_row_indices),
+        "invalid_count": len(invalid_rows),
+        "eligible_row_indices": eligible_row_indices,
+        "selected_row_indices": first_five,
+        "first_ten_valid_row_indices": first_ten,
+        "invalid_reason_counts": actual_reason_counts,
+        "invalid_rows": invalid_rows,
+        "gates": gates,
     }
 
 
@@ -236,7 +346,9 @@ def build_batch_plan(
     lock: Mapping[str, Any],
     inputs: Mapping[str, Any],
     cohort: Sequence[Mapping[str, Any]],
+    eligibility_audit: Mapping[str, Any],
 ) -> dict[str, Any]:
+    eligibility_audit_sha256 = canonical_json_sha256(eligibility_audit)
     fingerprint_payload = {
         "method": METHOD,
         "execution_commit": args.execution_commit,
@@ -244,6 +356,8 @@ def build_batch_plan(
         "single_driver_sha256": EXPECTED_SINGLE_DRIVER_SHA256,
         "row_indices": list(ROW_INDICES),
         "cohort": list(cohort),
+        "baseline_eligibility": lock["baseline_eligibility"],
+        "baseline_eligibility_audit_sha256": eligibility_audit_sha256,
         "generator": lock["generator"],
         "scorer": lock["scorer"],
         "controller": lock["controller"],
@@ -256,13 +370,14 @@ def build_batch_plan(
         "verified_fixed_input_sha256": inputs["verified_fixed_input_sha256"],
     }
     return {
-        "schema": "stage6c_2e_batch_plan_v1",
+        "schema": "stage6c_2e_batch_plan_v2",
         "method": METHOD,
         "claim_boundary": CLAIM_BOUNDARY,
         "execution_commit": args.execution_commit,
         "job_id": args.job_id,
         "row_indices": list(ROW_INDICES),
         "cohort": list(cohort),
+        "baseline_eligibility_audit_sha256": eligibility_audit_sha256,
         "lock_sha256": EXPECTED_LOCK_SHA256,
         "single_driver_sha256": EXPECTED_SINGLE_DRIVER_SHA256,
         "config_fingerprint": canonical_json_sha256(fingerprint_payload),
@@ -324,7 +439,7 @@ def validate_problem_checkpoint(
     )
     manifest = read_json(manifest_path)
     single.require(
-        manifest.get("schema") == "stage6c_2e_problem_artifact_manifest_v1",
+        manifest.get("schema") == "stage6c_2e_problem_artifact_manifest_v2",
         "Checkpoint manifest schema mismatch",
     )
     single.require(manifest.get("method") == METHOD, "Checkpoint manifest method mismatch")
@@ -566,7 +681,7 @@ def prepare_scorer_and_reference(
     per_example_path = output_dir / "reference_recompute_per_example.jsonl"
     single.atomic_jsonl(per_example_path, reference.per_example)
     diagnostics = {
-        "schema": "stage6c_2e_h200_native_reference_diagnostics_v1",
+        "schema": "stage6c_2e_h200_native_reference_diagnostics_v2",
         "status": "PASS" if h200_native_reference_gate else "FAIL",
         "method": METHOD,
         "claim_boundary": CLAIM_BOUNDARY,
@@ -882,7 +997,7 @@ def process_problem(
         "improvement_is_not_a_pass_gate": True,
     }
     result = {
-        "schema": "stage6c_2e_problem_result_v1",
+        "schema": "stage6c_2e_problem_result_v2",
         "status": status,
         "method": METHOD,
         "claim_boundary": CLAIM_BOUNDARY,
@@ -939,7 +1054,7 @@ def process_problem(
     single.atomic_json(problem_dir / "problem_result.json", result)
     single.nvidia_snapshot(problem_dir / "gpu_memory_after_problem.csv")
     manifest = {
-        "schema": "stage6c_2e_problem_artifact_manifest_v1",
+        "schema": "stage6c_2e_problem_artifact_manifest_v2",
         "method": METHOD,
         "row_index": row_index,
         "execution_commit": args.execution_commit,
@@ -976,7 +1091,7 @@ def failure_result(
 ) -> dict[str, Any]:
     problem_dir.mkdir(parents=True, exist_ok=True)
     result = {
-        "schema": "stage6c_2e_problem_failure_v1",
+        "schema": "stage6c_2e_problem_failure_v2",
         "status": "FAIL",
         "method": METHOD,
         "row_index": row_index,
@@ -1011,6 +1126,7 @@ def summarize_results(
     plan: Mapping[str, Any],
     lock: Mapping[str, Any],
     regression: Mapping[str, Any],
+    eligibility_audit: Mapping[str, Any],
     reference_diagnostics: Mapping[str, Any],
     results: Mapping[int, Mapping[str, Any]],
     checkpoint_audit: Mapping[str, Any],
@@ -1034,8 +1150,11 @@ def summarize_results(
         for row in passed
     ]
     gates = {
-        "fixed_five_row_cohort": sorted(results) == list(ROW_INDICES),
+        "fixed_five_baseline_valid_row_cohort": sorted(results)
+        == list(ROW_INDICES),
         "batch_regression": regression.get("status") == "PASS",
+        "baseline_eligibility_audit": eligibility_audit.get("status")
+        == "PASS",
         "h200_native_reference_valid": reference_diagnostics.get("status") == "PASS",
         "all_five_problem_results_pass": len(passed) == len(ROW_INDICES),
         "all_checkpoint_roundtrips_valid": checkpoint_audit.get("status") == "PASS",
@@ -1069,6 +1188,18 @@ def summarize_results(
         "failed_problem_count": len(ROW_INDICES) - len(passed),
         "gates": gates,
         "batch_regression": regression,
+        "baseline_eligibility": {
+            "status": eligibility_audit.get("status"),
+            "selection_policy": eligibility_audit.get("selection_policy"),
+            "selection_uses_cosine_or_generation_results": False,
+            "candidate_count": eligibility_audit.get("candidate_count"),
+            "valid_count": eligibility_audit.get("valid_count"),
+            "invalid_count": eligibility_audit.get("invalid_count"),
+            "selected_row_indices": eligibility_audit.get(
+                "selected_row_indices"
+            ),
+            "audit_sha256": canonical_json_sha256(eligibility_audit),
+        },
         "reference": {
             "status": reference_diagnostics.get("status"),
             "mean_reference_gradient_recomputations": 1,
@@ -1165,12 +1296,30 @@ def run(args: argparse.Namespace) -> int:
     dataset = load_from_disk(str(candidate_path))
     candidate_rows = [dataset[index] for index in range(len(dataset))]
     single.require(len(candidate_rows) == 100, "Candidate dataset size changed")
+    eligibility_audit = baseline_eligibility_audit(candidate_rows, lock)
+    single.atomic_json(
+        output_dir / "baseline_eligibility_audit.json",
+        eligibility_audit,
+    )
+    single.require(
+        eligibility_audit["status"] == "PASS",
+        "Locked baseline-eligibility cohort audit failed",
+    )
+    print(
+        "baseline_eligibility_gate=PASS "
+        f"selected={','.join(str(value) for value in ROW_INDICES)}",
+        flush=True,
+    )
     cohort = selected_cohort(candidate_rows)
+    cohort_by_row = {
+        int(identity["row_index"]): identity for identity in cohort
+    }
     plan = build_batch_plan(
         args=args,
         lock=lock,
         inputs=inputs,
         cohort=cohort,
+        eligibility_audit=eligibility_audit,
     )
     single.atomic_json(output_dir / "batch_plan.json", plan)
     resumed_results, resume_audit = copy_resumable_checkpoints(
@@ -1212,7 +1361,7 @@ def run(args: argparse.Namespace) -> int:
             result = process_problem(
                 row_index=row_index,
                 row=candidate_rows[row_index],
-                expected_identity=cohort[row_index],
+                expected_identity=cohort_by_row[row_index],
                 problem_dir=problem_dir,
                 config_fingerprint=str(plan["config_fingerprint"]),
                 inputs=inputs,
@@ -1292,6 +1441,7 @@ def run(args: argparse.Namespace) -> int:
         plan=plan,
         lock=lock,
         regression=regression,
+        eligibility_audit=eligibility_audit,
         reference_diagnostics=state["diagnostics"],
         results=results,
         checkpoint_audit=checkpoint_audit,

@@ -1,0 +1,65 @@
+{
+  "checkpoint": {
+    "atomic_problem_markers": true,
+    "resume_requires_same_execution_commit": true,
+    "resume_source_is_read_only": true
+  },
+  "claim_boundary": {
+    "af_measured": false,
+    "formal_protocol_locked": false,
+    "formal_rewrite_dataset_created": false,
+    "method_effect_claimed": false,
+    "selection_only_implemented": false,
+    "student_trained": false
+  },
+  "cohort": {
+    "count": 5,
+    "row_indices": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "selection": "first_five_rows_of_frozen_candidate_dataset_not_cherry_picked"
+  },
+  "controller": {
+    "c1_parent": "BaselineRewrite",
+    "c2_fallback_parent": "BaselineRewrite",
+    "c2_primary_parent": "C1_when_BaselineRewrite_and_C1_are_valid",
+    "cosine_decrease_required_for_pass": false,
+    "engineering_selection_policy": "lowest_valid_h200_native_cosine",
+    "formal_selection_rule_locked": false
+  },
+  "dependencies": {
+    "h200_runtime_policy": "h200_native_v1",
+    "stage6c_2d_v6_execution_commit": "a70c9e65fcd5165a4c0b0e4f10d7e59fc90cd742",
+    "stage6c_2d_v6_job_id": "9033138.kman.restech.unsw.edu.au",
+    "stage6c_2d_v6_status": "PASS"
+  },
+  "generator": {
+    "maximum_generation_attempts": 2,
+    "maximum_tokens": 1024,
+    "model_id": "openai/gpt-oss-120b",
+    "reasoning_effort": "medium",
+    "temperature": 0.6
+  },
+  "method": "stage6c_2e_five_problem_batch_preflight_v1_h200_native",
+  "resources": {
+    "cpus": 8,
+    "gpus": 1,
+    "host_memory_gb": 128,
+    "pbs_walltime": "00:30:00",
+    "requested_gpu_model": "H200"
+  },
+  "schema": "stage6c_2e_batch_preflight_lock_v1",
+  "scope": "engineering_multi_problem_batch_and_resource_preflight_only",
+  "scorer": {
+    "a100_scalar_or_score_equivalence_required": false,
+    "direction": "lower_is_better",
+    "mean_reference_gradient_recomputations_per_job": 1,
+    "primary_metric": "gradient_cosine",
+    "reference_count": 100,
+    "runtime_policy": "h200_native_v1"
+  }
+}

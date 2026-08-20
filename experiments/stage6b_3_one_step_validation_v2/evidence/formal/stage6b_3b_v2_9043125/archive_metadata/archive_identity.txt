@@ -1,0 +1,10 @@
+archive_status=PASS_EXACT_COPY
+archived_utc=2026-08-20T00:40:19Z
+source_path=/srv/scratch/z5463756/honour/results/stage6b-gradient-feedback-qwen3-1.7b-v1/one_step_validation/formal_v2/stage6b_3b_v2_9043125
+home_path=/home/z5463756/honour/results/trace-rewriting/stage6b-gradient-feedback-qwen3-1.7b-v1/one_step_validation/formal_v2/stage6b_3b_v2_9043125
+job_id=9043125.kman.restech.unsw.edu.au
+execution_commit=35442654a8b388f2584d01fd2f7a5b6afb9ff9ed
+branch=research/gradient-feedback
+source_file_count=20
+source_bytes=19324641
+repository_head=35442654a8b388f2584d01fd2f7a5b6afb9ff9ed

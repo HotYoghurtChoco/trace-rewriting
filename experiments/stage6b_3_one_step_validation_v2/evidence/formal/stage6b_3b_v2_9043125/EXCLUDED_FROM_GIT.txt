@@ -1,0 +1,7 @@
+This Git directory is a compact subset of the verified formal output.
+The complete output remains in the durable HOME and whole-Stage 6B archives.
+Canonical code, PBS, and protocol files remain in execution commit 35442654.
+The CSV is retained as the compact 500-cell machine-readable result.
+The larger JSONL, per-reference losses, logs, runtime environment, and duplicate provenance copies are excluded.
+Original large-file manifest entry:
+52bce9af49a6758a311de933b369685f314da8e9c21e0875f97b6e598737d716  ./stage6b_3_reference_losses.jsonl

@@ -1,0 +1,97 @@
+Job Id: 9043125.kman.restech.unsw.edu.au
+    Job_Name = tr-s6b-3b-v2
+    Job_Owner = z5463756@katana1
+    resources_used.cpupercent = 95
+    resources_used.cput = 00:49:38
+    resources_used.fs_usage = 400
+    resources_used.GPU_duration = 51.22mins
+    resources_used.GPU_duration_per_node = k110:(51.22mins)
+    resources_used.GPU_duration_per_node_gpu = k110:(gpu1:51.22mins)
+    resources_used.GPU_endTime_per_node_gpu = k110:(gpu1:Wed Aug 19 23:54:40 20
+	26)
+    resources_used.GPU_energyConsumed = 266.29W
+    resources_used.GPU_energyConsumed_per_node = k110:(266.29W)
+    resources_used.GPU_energyConsumed_per_node_gpu = k110:(gpu1:266.29W)
+    resources_used.GPU_maxGpuMemoryUsed = 14.87GB
+    resources_used.GPU_maxGpuMemoryUsed_per_node = k110:(14.87GB)
+    resources_used.GPU_maxGpuMemoryUsed_per_node_gpu = k110:(gpu1:14.87GB)
+    resources_used.GPU_memoryClock_average_per_node_gpu = k110:(gpu1:1215MHz)
+    resources_used.GPU_memoryClock_maxValue_per_node_gpu = k110:(gpu1:1215MHz)
+    resources_used.GPU_memoryClock_minValue_per_node_gpu = k110:(gpu1:1215MHz)
+    resources_used.GPU_memoryUtilization_average_per_node_gpu = k110:(gpu1:24%)
+	
+    resources_used.GPU_memoryUtilization_maxValue_per_node_gpu = k110:(gpu1:42%
+	)
+    resources_used.GPU_memoryUtilization_minValue_per_node_gpu = k110:(gpu1:0%)
+	
+    resources_used.GPU_smClock_average_per_node_gpu = k110:(gpu1:1051MHz)
+    resources_used.GPU_smClock_maxValue_per_node_gpu = k110:(gpu1:1410MHz)
+    resources_used.GPU_smClock_minValue_per_node_gpu = k110:(gpu1:210MHz)
+    resources_used.GPU_smUtilization_average_per_node_gpu = k110:(gpu1:59%)
+    resources_used.GPU_smUtilization_maxValue_per_node_gpu = k110:(gpu1:100%)
+    resources_used.GPU_smUtilization_minValue_per_node_gpu = k110:(gpu1:0%)
+    resources_used.GPU_startTime_per_node_gpu = k110:(gpu1:Wed Aug 19 23:03:27 
+	2026)
+    resources_used.mem = 6263368kb
+    resources_used.ncpus = 8
+    resources_used.vmem = 6263368kb
+    resources_used.walltime = 00:51:12
+    job_state = F
+    queue = csegpu2
+    server = kman
+    Checkpoint = u
+    ctime = Wed Aug 19 22:02:07 2026
+    Error_Path = katana1:/home/z5463756/honour/papers/trace-rewriting/tr-s6b-3b
+	-v2.e9043125
+    exec_host = k110/1*8
+    exec_vnode = (k110:ngpus=1:mem=48234496kb:ncpus=8)
+    Hold_Types = n
+    Join_Path = oe
+    Keep_Files = n
+    Mail_Points = a
+    mtime = Wed Aug 19 23:54:46 2026
+    Output_Path = katana1:/srv/scratch/z5463756/honour/logs/stage6b/tr-s6b-3b-v
+	2.pbs.log
+    Priority = 0
+    qtime = Wed Aug 19 22:02:07 2026
+    Rerunable = True
+    Resource_List.ib = no
+    Resource_List.mem = 46gb
+    Resource_List.ncpus = 8
+    Resource_List.ngpus = 1
+    Resource_List.nodect = 1
+    Resource_List.place = group=csegpu2
+    Resource_List.select = ngpus=1:mem=46gb:gpu_model=A100:cpu_per_gpu_gte_8=1:
+	mem_per_gpu_gte_62=1:ncpus=8
+    Resource_List.walltime = 02:00:00
+    stime = Wed Aug 19 23:03:27 2026
+    obittime = Wed Aug 19 23:54:46 2026
+    session_id = 3723792
+    Shell_Path_List = /bin/bash
+    jobdir = /home/z5463756
+    substate = 92
+    Variable_List = PBS_O_HOME=/home/z5463756,PBS_O_LANG=en_AU.UTF-8,
+	PBS_O_LOGNAME=z5463756,
+	PBS_O_PATH=/tmp/.Kelvin_sshfs.RcBin.z5463756:/usr/share/Modules/bin:/u
+	sr/lib64/ccache:/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/opt/
+	pbs/bin:/opt/pbs/bin,PBS_O_SHELL=/bin/bash,
+	PBS_O_WORKDIR=/home/z5463756/honour/papers/trace-rewriting,
+	PBS_O_SYSTEM=Linux,
+	EXPECTED_EXECUTION_COMMIT=35442654a8b388f2584d01fd2f7a5b6afb9ff9ed,
+	PBS_O_QUEUE=csegpu2,PBS_O_HOST=katana1,nvidia_group_id=23955
+    comment = Job run at Wed Aug 19 at 23:03 on (k110:ngpus=1:mem=48234496kb:nc
+	pus=8) and finished
+    etime = Wed Aug 19 22:04:38 2026
+    run_count = 1
+    eligible_time = 00:57:15
+    Stageout_status = 1
+    Exit_status = 0
+    Submit_arguments = -h -l walltime=02:00:00 -v EXPECTED_EXECUTION_COMMIT=354
+	42654a8b388f2584d01fd2f7a5b6afb9ff9ed /tmp/experimentsstage6b_3_one_ste
+	p_validation_v2pbsstage6b_3b_one_step_formal_v2.pbs.uv2Vcmi
+    estimated.exec_vnode = (k095:ngpus=1:mem=48234496kb:ncpus=8)
+    estimated.start_time = Wed Aug 19 23:16:03 2026
+    history_timestamp = 1787147686
+    project = _pbs_project_default
+    Submit_Host = katana1
+

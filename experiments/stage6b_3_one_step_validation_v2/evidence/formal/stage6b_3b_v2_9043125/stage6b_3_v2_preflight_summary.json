@@ -1,0 +1,50 @@
+{
+  "absolute_error": {
+    "max": 0.00086953304708004,
+    "mean": 8.115181233733893e-05,
+    "median": 2.559646964073181e-05,
+    "min": 0.0,
+    "q25": 8.612871170043945e-06,
+    "q75": 4.955381155014038e-05,
+    "q95": 0.00042632184922695136
+  },
+  "candidate_count": 100,
+  "frozen_stage6b_1_dot_remains_inferential_predictor": true,
+  "method_version": "stage6b_3_one_step_validation_v2",
+  "normalized_error_by_frozen_norm_product": {
+    "max": 0.0008265327290724922,
+    "mean": 6.511786405936038e-05,
+    "median": 7.3933850414181375e-06,
+    "min": 0.0,
+    "q25": 2.6950673597415245e-06,
+    "q75": 1.9270021998830658e-05,
+    "q95": 0.00043793971578817194
+  },
+  "old_v1_tolerance_failure_count": 45,
+  "old_v1_tolerance_is_audit_only": true,
+  "old_v1_tolerance_pass_count": 55,
+  "optimizer_created": false,
+  "parameter_integrity": {
+    "frozen_sha256_after": "203c78f384b49dfc93815eb413fac2d858644f9163df2fc1c343fb97252f86d4",
+    "frozen_sha256_before": "203c78f384b49dfc93815eb413fac2d858644f9163df2fc1c343fb97252f86d4",
+    "status": "PASS_NO_PARAMETER_UPDATE",
+    "trainable_sha256_after": "44827bbc144c9069d900b32b08e48f51b7dcb599a83f44c58852d2bcb5a049fc",
+    "trainable_sha256_before": "44827bbc144c9069d900b32b08e48f51b7dcb599a83f44c58852d2bcb5a049fc"
+  },
+  "pass_fail_criteria": {
+    "all_values_finite": true,
+    "normalized_dot_discrepancy_maximum": 0.002,
+    "spearman_minimum": 0.999
+  },
+  "pearson_frozen_vs_recomputed": 0.9999994432560698,
+  "positive_eta_update_performed": false,
+  "reference_count": 100,
+  "scientific_endpoint_evaluated": false,
+  "scope": "all_100_candidates_no_update_vector_reproducibility",
+  "sign_agreement_count": 100,
+  "sign_agreement_total": 100,
+  "spearman_frozen_vs_recomputed": 0.9999759975997602,
+  "status": "PASS",
+  "top50_changed_membership_count": 0,
+  "top50_overlap_count": 50
+}

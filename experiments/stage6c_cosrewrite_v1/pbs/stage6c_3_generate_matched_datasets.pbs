@@ -1,0 +1,143 @@
+#!/bin/bash
+#PBS -N tr-s6c3-generate
+#PBS -l select=1:ncpus=8:ngpus=1:mem=128gb:gpu_model=H200
+#PBS -l walltime=00:45:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c3-generate.pbs.log
+
+set -euo pipefail
+
+REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+ENV_ROOT="/srv/scratch/z5463756/honour/envs/trace-rewriting-official"
+HONOUR_ROOT="/srv/scratch/z5463756/honour"
+RESULT_ROOT="$HONOUR_ROOT/results/stage6c-cosrewrite-qwen3-1.7b-v1"
+OUT_DIR="$RESULT_ROOT/stage6c3_matched_generation_v1"
+DRIVER="$REPO_ROOT/experiments/stage6c_cosrewrite_v1/run_stage6c3_generation.py"
+SIF="$HONOUR_ROOT/containers/vllm-openai-v0.11.0-x86_64.sif"
+SNAPSHOT="$HONOUR_ROOT/cache/huggingface/hub/models--openai--gpt-oss-120b/snapshots/b5c939de8f754692c1647ca79fbf85e8c1e70f8a"
+MODEL_ID="openai/gpt-oss-120b"
+PORT=18080
+SERVER_PID=""
+
+: "${PBS_JOBID:?PBS_JOBID is required}"
+: "${EXPECTED_EXECUTION_COMMIT:?Pass EXPECTED_EXECUTION_COMMIT with qsub -v}"
+
+mkdir -p "$HONOUR_ROOT/logs/stage6c" "$OUT_DIR"
+exec > >(tee -a "$OUT_DIR/run.log") 2>&1
+
+stop_server() {
+    if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM -- "-$SERVER_PID" 2>/dev/null || kill -TERM "$SERVER_PID" 2>/dev/null || true
+        for _ in $(seq 1 30); do
+            kill -0 "$SERVER_PID" 2>/dev/null || break
+            sleep 2
+        done
+        kill -KILL -- "-$SERVER_PID" 2>/dev/null || kill -KILL "$SERVER_PID" 2>/dev/null || true
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+}
+trap stop_server EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+cd "$REPO_ROOT"
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_EXECUTION_COMMIT" ]]
+[[ -z "$(git status --porcelain)" ]]
+test -x "$ENV_ROOT/bin/python"
+test -f "$DRIVER"
+test -f "$SIF"
+test -d "$SNAPSHOT"
+
+export CUDA_VISIBLE_DEVICES=0
+export HF_HOME="$HONOUR_ROOT/cache/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+export HF_DATASETS_CACHE="$HF_HOME/datasets"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+export TOKENIZERS_PARALLELISM=false
+export PYTHONNOUSERSITE=1
+export PYTHONHASHSEED=888
+export OMP_NUM_THREADS=8
+export XDG_CACHE_HOME="$HONOUR_ROOT/cache/vllm"
+export TRITON_CACHE_DIR="$HONOUR_ROOT/cache/triton/stage6c3"
+mkdir -p "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR"
+ulimit -n 65535 2>/dev/null || true
+
+CONTAINER_EXEC=(
+    /bin/apptainer exec
+    --nv
+    --cleanenv
+    --bind "$HONOUR_ROOT:$HONOUR_ROOT"
+    --env CUDA_VISIBLE_DEVICES=0
+    --env HF_HOME="$HF_HOME"
+    --env HF_HUB_CACHE="$HF_HUB_CACHE"
+    --env HF_DATASETS_CACHE="$HF_DATASETS_CACHE"
+    --env HF_HUB_OFFLINE=1
+    --env HF_DATASETS_OFFLINE=1
+    --env TRANSFORMERS_OFFLINE=1
+    --env HF_HUB_DISABLE_TELEMETRY=1
+    --env TOKENIZERS_PARALLELISM=false
+    --env VLLM_LOGGING_LEVEL=INFO
+    --env VLLM_NO_USAGE_STATS=1
+    --env DO_NOT_TRACK=1
+    --env PYTHONNOUSERSITE=1
+    --env XDG_CACHE_HOME="$XDG_CACHE_HOME"
+    --env TRITON_CACHE_DIR="$TRITON_CACHE_DIR"
+    "$SIF"
+)
+
+setsid "${CONTAINER_EXEC[@]}" \
+    vllm serve "$SNAPSHOT" \
+    --served-model-name "$MODEL_ID" \
+    --host 127.0.0.1 \
+    --port "$PORT" \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.75 \
+    --max-model-len 8192 \
+    --dtype bfloat16 \
+    --quantization mxfp4 \
+    --load-format safetensors \
+    --model-impl vllm \
+    --seed 0 \
+    --reasoning-parser openai_gptoss \
+    > "$OUT_DIR/vllm_server.log" 2>&1 &
+SERVER_PID="$!"
+
+ready=0
+for attempt in $(seq 1 240); do
+    if curl --fail --silent "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+        ready=1
+        echo "server_ready_after_attempt=$attempt"
+        break
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        tail -n 200 "$OUT_DIR/vllm_server.log" >&2 || true
+        exit 1
+    fi
+    sleep 5
+done
+[[ "$ready" -eq 1 ]]
+
+PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src" "$ENV_ROOT/bin/python" -u "$DRIVER" \
+    --api-base-url "http://127.0.0.1:${PORT}/v1" \
+    --output-dir "$OUT_DIR" \
+    --execution-commit "$EXPECTED_EXECUTION_COMMIT" \
+    --job-id "$PBS_JOBID" \
+    --temperature 0.6 \
+    --max-tokens 1024 \
+    --reasoning-effort medium \
+    --max-generation-attempts 2
+
+test -s "$OUT_DIR/generation_summary.json"
+cat > "$OUT_DIR/GENERATION_COMPLETE" <<EOF
+status=PASS
+job_id=$PBS_JOBID
+execution_commit=$EXPECTED_EXECUTION_COMMIT
+generator=$MODEL_ID
+generator_revision=b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+row_count=100
+output_dir=$OUT_DIR
+EOF
+echo "Stage 6C.3 matched generation complete: $OUT_DIR"

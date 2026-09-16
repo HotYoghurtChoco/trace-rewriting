@@ -1,0 +1,90 @@
+#!/bin/bash
+#PBS -N tr-s6c3-students
+#PBS -l select=1:ncpus=8:ngpus=1:mem=46gb:gpu_model=A100
+#PBS -l walltime=01:30:00
+#PBS -j oe
+#PBS -o /srv/scratch/z5463756/honour/logs/stage6c/tr-s6c3-students.pbs.log
+
+set -euo pipefail
+
+REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-stage6c"
+ENV_ROOT="/srv/scratch/z5463756/honour/envs/trace-rewriting-official"
+HONOUR_ROOT="/srv/scratch/z5463756/honour"
+RESULT_ROOT="$HONOUR_ROOT/results/stage6c-cosrewrite-qwen3-1.7b-v1"
+GENERATION_DIR="$RESULT_ROOT/stage6c3_matched_generation_v1"
+STUDENTS_ROOT="$RESULT_ROOT/stage6c3_matched_students_v1"
+PREPARE="$REPO_ROOT/experiments/stage6c_cosrewrite_v1/prepare_stage6c3_student_run.py"
+SUMMARIZE="$REPO_ROOT/experiments/stage6c_cosrewrite_v1/summarize_stage6c3_results.py"
+STUDENT_DRIVER="$REPO_ROOT/experiments/stage6c_cosrewrite_v1/run_stage6c3_students.py"
+BASE_MODEL="$HONOUR_ROOT/models/qwen3-1.7b-base-ea980cb0a6c2"
+TOKENIZER="$HONOUR_ROOT/models/qwen3-1.7b-tokenizer-70d244cc86cc"
+
+: "${PBS_JOBID:?PBS_JOBID is required}"
+: "${EXPECTED_EXECUTION_COMMIT:?Pass EXPECTED_EXECUTION_COMMIT with qsub -v}"
+JOB_TMP="/tmp/stage6c3-students-${USER}-${PBS_JOBID%%.*}"
+
+mkdir -p "$HONOUR_ROOT/logs/stage6c" "$STUDENTS_ROOT"
+mkdir -p "$JOB_TMP/triton"
+exec > >(tee -a "$STUDENTS_ROOT/run.log") 2>&1
+
+cd "$REPO_ROOT"
+[[ "$(git rev-parse HEAD)" == "$EXPECTED_EXECUTION_COMMIT" ]]
+[[ -z "$(git status --porcelain)" ]]
+test -f "$GENERATION_DIR/GENERATION_COMPLETE"
+test -x "$ENV_ROOT/bin/python"
+test -d "$BASE_MODEL"
+test -d "$TOKENIZER"
+
+module purge
+module load gcc/12.2.0
+module load python/3.11.3
+module load cuda/12.8.0
+
+export PATH="$ENV_ROOT/bin:$PATH"
+export HF_HOME="$HONOUR_ROOT/cache/huggingface"
+export XDG_CACHE_HOME="$HONOUR_ROOT/cache"
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONNOUSERSITE=1
+export PYTHONPATH="$REPO_ROOT/src:$REPO_ROOT/optimize"
+export TOKENIZERS_PARALLELISM=false
+export WANDB_DISABLED=true
+export OMP_NUM_THREADS=8
+export TRACE_NUM_PROC=4
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export TMPDIR="$JOB_TMP"
+export TRITON_CACHE_DIR="$JOB_TMP/triton"
+
+for seed in 888 889 890; do
+    seed_root="$STUDENTS_ROOT/seed_$seed"
+    "$ENV_ROOT/bin/python" "$PREPARE" \
+        --generation-dir "$GENERATION_DIR" \
+        --working-dir "$seed_root" \
+        --seed "$seed" \
+        --base-model "$BASE_MODEL" \
+        --tokenizer "$TOKENIZER"
+
+    if [[ ! -f "$seed_root/STUDENT_COMPLETE" ]]; then
+        "$ENV_ROOT/bin/python" -u "$STUDENT_DRIVER" \
+            --config "$seed_root/config.yaml" --seed "$seed"
+        test -s "$seed_root/iter_0/instructions_and_scores.yaml"
+        touch "$seed_root/STUDENT_COMPLETE"
+    fi
+done
+
+"$ENV_ROOT/bin/python" "$SUMMARIZE" \
+    --students-root "$STUDENTS_ROOT" \
+    --output-dir "$STUDENTS_ROOT"
+
+test -s "$STUDENTS_ROOT/stage6c3_student_summary.json"
+cat > "$STUDENTS_ROOT/STUDENTS_COMPLETE" <<EOF
+status=PASS
+job_id=$PBS_JOBID
+execution_commit=$EXPECTED_EXECUTION_COMMIT
+student_model=$BASE_MODEL
+student_seeds=888,889,890
+output_dir=$STUDENTS_ROOT
+EOF
+echo "Stage 6C.3 matched student result complete: $STUDENTS_ROOT"

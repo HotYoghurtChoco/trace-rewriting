@@ -1,0 +1,7 @@
+status=PASS
+job_id=9326978.kman.restech.unsw.edu.au
+execution_commit=7356107b096455a3fbee09943466e7ddd240be1f
+generator=openai/gpt-oss-120b
+generator_revision=b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+row_count=100
+output_dir=/srv/scratch/z5463756/honour/results/stage6c-cosrewrite-qwen3-1.7b-v1/stage6c3_matched_generation_v1

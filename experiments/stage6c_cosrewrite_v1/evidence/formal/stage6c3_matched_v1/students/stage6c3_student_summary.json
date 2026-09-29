@@ -1,0 +1,119 @@
+{
+  "arm_means": {
+    "baseline_rewrite": {
+      "mean_af_accuracy": 0.6666666666666666,
+      "mean_raw_accuracy": 0.6333333333333333,
+      "mean_raw_token_cap_count": 9
+    },
+    "clean": {
+      "mean_af_accuracy": 0.8266666666666667,
+      "mean_raw_accuracy": 0.8066666666666666,
+      "mean_raw_token_cap_count": 3.3333333333333335
+    },
+    "cosrewrite": {
+      "mean_af_accuracy": 0.7966666666666667,
+      "mean_raw_accuracy": 0.7833333333333333,
+      "mean_raw_token_cap_count": 4
+    },
+    "selection_only": {
+      "mean_af_accuracy": 0.8033333333333333,
+      "mean_raw_accuracy": 0.79,
+      "mean_raw_token_cap_count": 4.666666666666667
+    }
+  },
+  "per_seed": [
+    {
+      "baseline_rewrite": {
+        "af_accuracy": 0.64,
+        "raw_accuracy": 0.61,
+        "raw_token_cap_count": 9
+      },
+      "clean": {
+        "af_accuracy": 0.81,
+        "raw_accuracy": 0.79,
+        "raw_token_cap_count": 4
+      },
+      "cosrewrite": {
+        "af_accuracy": 0.8,
+        "raw_accuracy": 0.78,
+        "raw_token_cap_count": 4
+      },
+      "seed": 888,
+      "selection_only": {
+        "af_accuracy": 0.8,
+        "raw_accuracy": 0.79,
+        "raw_token_cap_count": 4
+      },
+      "selection_only_af_minus_cosrewrite_af": 0.0
+    },
+    {
+      "baseline_rewrite": {
+        "af_accuracy": 0.71,
+        "raw_accuracy": 0.65,
+        "raw_token_cap_count": 7
+      },
+      "clean": {
+        "af_accuracy": 0.84,
+        "raw_accuracy": 0.82,
+        "raw_token_cap_count": 2
+      },
+      "cosrewrite": {
+        "af_accuracy": 0.78,
+        "raw_accuracy": 0.77,
+        "raw_token_cap_count": 4
+      },
+      "seed": 889,
+      "selection_only": {
+        "af_accuracy": 0.81,
+        "raw_accuracy": 0.79,
+        "raw_token_cap_count": 5
+      },
+      "selection_only_af_minus_cosrewrite_af": 0.030000000000000027
+    },
+    {
+      "baseline_rewrite": {
+        "af_accuracy": 0.65,
+        "raw_accuracy": 0.64,
+        "raw_token_cap_count": 11
+      },
+      "clean": {
+        "af_accuracy": 0.83,
+        "raw_accuracy": 0.81,
+        "raw_token_cap_count": 4
+      },
+      "cosrewrite": {
+        "af_accuracy": 0.81,
+        "raw_accuracy": 0.8,
+        "raw_token_cap_count": 4
+      },
+      "seed": 890,
+      "selection_only": {
+        "af_accuracy": 0.8,
+        "raw_accuracy": 0.79,
+        "raw_token_cap_count": 5
+      },
+      "selection_only_af_minus_cosrewrite_af": -0.010000000000000009
+    }
+  ],
+  "primary_contrast": {
+    "ci95_high": 0.05837811679149489,
+    "ci95_low": -0.04504478345816154,
+    "definition": "selection_only_af_minus_cosrewrite_af",
+    "interpretation": "the three-seed result is inconclusive",
+    "interval": "paired_t_df_2",
+    "mean": 0.006666666666666672,
+    "positive_direction": "CosRewrite lowers held-out AF",
+    "values": [
+      0.0,
+      0.030000000000000027,
+      -0.010000000000000009
+    ]
+  },
+  "schema": "stage6c3_matched_student_summary_v1",
+  "seeds": [
+    888,
+    889,
+    890
+  ],
+  "status": "PASS"
+}

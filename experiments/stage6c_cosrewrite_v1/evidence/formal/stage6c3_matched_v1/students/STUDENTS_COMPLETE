@@ -1,0 +1,6 @@
+status=PASS
+job_id=9328860.kman.restech.unsw.edu.au
+execution_commit=7356107b096455a3fbee09943466e7ddd240be1f
+student_model=/srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+student_seeds=888,889,890
+output_dir=/srv/scratch/z5463756/honour/results/stage6c-cosrewrite-qwen3-1.7b-v1/stage6c3_matched_students_v1

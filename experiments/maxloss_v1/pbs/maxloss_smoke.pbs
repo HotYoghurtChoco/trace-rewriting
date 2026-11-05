@@ -1,0 +1,26 @@
+#!/bin/bash
+#PBS -N tr-maxloss-smoke
+#PBS -l select=1:ncpus=4:ngpus=1:mem=32gb:gpu_model=H200
+#PBS -l walltime=00:15:00
+#PBS -j oe
+
+set -euo pipefail
+REPO_ROOT="/home/z5463756/honour/papers/trace-rewriting-maxloss"
+HONOUR_ROOT="/srv/scratch/z5463756/honour"
+ENV_ROOT="$HONOUR_ROOT/envs/trace-rewriting-official"
+RUN_ROOT="$HONOUR_ROOT/results/maxloss-qwen3-1.7b-v1/smoke_${PBS_JOBID%%.*}"
+
+module purge
+module load gcc/12.2.0 python/3.11.3 cuda/12.8.0
+cd "$REPO_ROOT"
+export PATH="$ENV_ROOT/bin:$PATH"
+export PYTHONPATH="$REPO_ROOT:$REPO_ROOT/src"
+export HF_HOME="$HONOUR_ROOT/cache/huggingface"
+export XDG_CACHE_HOME="$HONOUR_ROOT/cache"
+export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TOKENIZERS_PARALLELISM=false
+export OMP_NUM_THREADS=4 TRACE_NUM_PROC=4 WANDB_DISABLED=true
+
+echo "MaxLoss output: $RUN_ROOT"
+"$ENV_ROOT/bin/python" -u experiments/maxloss_v1/run_optimization.py \
+    --mode smoke --limit 5 --output-dir "$RUN_ROOT"

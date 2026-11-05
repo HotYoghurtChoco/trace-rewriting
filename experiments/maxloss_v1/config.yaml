@@ -1,0 +1,14 @@
+seed: 888
+input_dataset: /srv/scratch/z5463756/honour/results/stage6a-formal-pilot-qwen3-1.7b-v1/original_traces
+cohort_size: 100
+training_config: experiments/stage6a_formal_pilot_qwen3_1p7b_v1/evidence/config/optimize_stage6a_formal_pilot_v1.yaml
+base_model: /srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2
+base_model_revision: ea980cb0a6c2
+tokenizer: /srv/scratch/z5463756/honour/models/qwen3-1.7b-tokenizer-70d244cc86cc
+tokenizer_revision: 70d244cc86cc
+dtype: bfloat16
+attention_implementation: sdpa
+maximum_total_tokens: 1024
+max_rounds: 5
+candidates_per_round: 16
+minimum_loss_gain: 0.0001

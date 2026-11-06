@@ -1,0 +1,24 @@
+{
+  "status": "complete",
+  "mode": "smoke",
+  "row_count": 5,
+  "row_indices": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "rows_modified": 5,
+  "scored_rows": 5,
+  "mean_loss_before": 0.5349910259246826,
+  "mean_loss_after": 0.5877478897571564,
+  "stop_reasons": {
+    "no_loss_improvement": 4,
+    "no_eligible_edit": 1
+  },
+  "skipped_before_smoke_selection": [],
+  "search_seconds": 5.55042926594615,
+  "elapsed_seconds": 22.818855479359627,
+  "peak_gpu_allocated_gib": 5.628416061401367
+}

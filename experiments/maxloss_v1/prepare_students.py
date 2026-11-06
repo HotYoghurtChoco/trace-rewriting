@@ -40,6 +40,8 @@ def run(args):
         raise ValueError("Student training requires the complete, ordered 100-row formal output")
     metadata = json.loads((generation / "run_config.json").read_text())
     config = metadata["config"]
+    student_model = args.student_model or config["base_model"]
+    student_tokenizer = args.student_tokenizer or config["tokenizer"]
     data = load_from_disk(str(generation / "optimized_dataset"))
     if len(data) != 100:
         raise ValueError("Expected 100 optimized rows")
@@ -50,13 +52,16 @@ def run(args):
     # to the candidate arm so both trainers see matching problem order.
     data.shuffle(seed=137).save_to_disk(str(workdir / "optimized_clean"))
     template = yaml.safe_load((REPO / config["training_config"]).read_text())
-    training = matched_config(template, workdir, config["base_model"], config["tokenizer"], args.seed)
+    training = matched_config(template, workdir, student_model, student_tokenizer, args.seed)
     (workdir / "config.yaml").write_text(yaml.safe_dump(training, sort_keys=False))
     (workdir / "iter_0").mkdir()
     candidates = {"candidate_instructions": [{"name": "optimized_clean", "instruction": "Input-gradient optimized Clean traces.", "score": None}]}
     (workdir / "iter_0/candidate_instructions.yaml").write_text(yaml.safe_dump(candidates, sort_keys=False))
     (workdir / "input_record.json").write_text(json.dumps({
         "generation_dir": str(generation), "seed": args.seed, "rows": 100,
+        "trace_optimization_model": config["base_model"],
+        "student_model": student_model,
+        "student_tokenizer": student_tokenizer,
         "training_order": "both arms use the same seed137 permutation before Trainer shuffling",
         "primary_contrast": "clean_af_minus_optimized_clean_af",
     }, indent=2) + "\n")
@@ -68,4 +73,9 @@ if __name__ == "__main__":
     parser.add_argument("--generation-dir", type=Path, required=True)
     parser.add_argument("--working-dir", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=888)
-    run(parser.parse_args())
+    parser.add_argument("--student-model", help="Downstream base checkpoint for both students.")
+    parser.add_argument("--student-tokenizer", help="Matching tokenizer with an instruction chat template.")
+    args = parser.parse_args()
+    if bool(args.student_model) != bool(args.student_tokenizer):
+        parser.error("Provide --student-model and --student-tokenizer together.")
+    run(args)

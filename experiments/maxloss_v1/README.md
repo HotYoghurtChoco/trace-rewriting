@@ -137,3 +137,18 @@ The CPU tests cover the completion mask (including PAD=EOS), fresh candidate
 labels, numerical input-gradient agreement, frozen weights, actual-loss ascent,
 edit budgets, unchanged fallback, token limits and protected text. The real
 checkpoint's loss changes and runtime are obtained from the Katana sample run.
+
+## Step 2 and Step 3 results (100 training examples, seed 888)
+
+In Step 2, MaxLoss modified 91 of the 100 Clean traces. Across the 92 scored
+traces, mean completion loss under the fixed Qwen3-1.7B-Base model rose from
+0.4869 to 0.5367. [Optimization summary](evidence/step2_seed888/formal_9679942/summary.json)
+
+Step 3 reused the same Clean and MaxLoss traces to train two fresh Llama
+students. Both steps evaluated the students on the same 100 held-out questions.
+The primary metric was answer-forced accuracy (AF).
+
+| Student | Clean AF | MaxLoss AF | Drop (percentage points) |
+|---|---:|---:|---:|
+| [Step 2: Qwen3-1.7B-Base](evidence/step2_seed888/students_seed_888_9682319/iter_0/instructions_and_scores.yaml) | 85% | 85% | 0 |
+| [Step 3: Llama-3.2-3B](evidence/step3_llama3b_seed888/students_seed_888_9685366/iter_0/instructions_and_scores.yaml) | 23% | 20% | 3 |

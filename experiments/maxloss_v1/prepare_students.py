@@ -50,7 +50,8 @@ def run(args):
     data.select_columns(["problem", "solution", "original_trace"]).save_to_disk(str(workdir / "original_traces"))
     # warmup_models shuffles Clean with seed 137. Apply the same permutation
     # to the candidate arm so both trainers see matching problem order.
-    data.shuffle(seed=137).save_to_disk(str(workdir / "optimized_clean"))
+    # Parallel seed jobs read one frozen dataset. Keep the small index out of its directory.
+    data.shuffle(seed=137, keep_in_memory=True).save_to_disk(str(workdir / "optimized_clean"))
     template = yaml.safe_load((REPO / config["training_config"]).read_text())
     training = matched_config(template, workdir, student_model, student_tokenizer, args.seed)
     (workdir / "config.yaml").write_text(yaml.safe_dump(training, sort_keys=False))

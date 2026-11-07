@@ -1,0 +1,40 @@
+#!/bin/bash
+#PBS -j oe
+
+# step3_transfer.sh supplies the seed range, resources and model paths.
+set -euo pipefail
+seed=${PBS_ARRAY_INDEX:?Submit with step3_transfer.sh}
+job_number=${PBS_JOBID%%.*}
+job_number=${job_number%%\[*}
+student_dir="$RESULT_ROOT/students_seed_${seed}_${job_number}"
+
+module purge
+module load gcc/12.2.0 python/3.11.3 cuda/12.8.0
+env_root="$HONOUR_SCRATCH/envs/trace-rewriting-official"
+export PATH="$env_root/bin:$PATH"
+export HF_HOME="$HONOUR_SCRATCH/cache/huggingface" XDG_CACHE_HOME="$HONOUR_SCRATCH/cache"
+export HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TOKENIZERS_PARALLELISM=false
+export OMP_NUM_THREADS=8 TRACE_NUM_PROC=4 WANDB_DISABLED=true VLLM_WORKER_MULTIPROC_METHOD=spawn
+
+run_tmp=$(mktemp -d "${TMPDIR:-/tmp}/maxloss-${job_number}-${seed}-XXXXXX")
+trap 'rm -rf -- "$run_tmp"' EXIT
+export TMPDIR="$run_tmp" TRITON_CACHE_DIR="$run_tmp/triton"
+code="$run_tmp/code"
+mkdir -p "$code" "$TRITON_CACHE_DIR"
+# Read the submitted commit even if the shared checkout advances while queued.
+git -C "$PBS_O_WORKDIR" archive "$SOURCE_COMMIT" -- src optimize experiments/maxloss_v1 \
+    experiments/stage6c_cosrewrite_v1/run_stage6c3_students.py \
+    experiments/stage6a_formal_pilot_qwen3_1p7b_v1/evidence/config | tar -x -C "$code"
+cd "$code"
+export PYTHONPATH="$code:$code/src"
+
+printf 'job=%s seed=%s execution_commit=%s\n' "$PBS_JOBID" "$seed" "$SOURCE_COMMIT"
+printf 'student_model=%s\nstudent_tokenizer=%s\ngeneration_dir=%s\nstudent_results=%s\n' \
+    "$STUDENT_MODEL" "$STUDENT_TOKENIZER" "$GENERATION_DIR" "$student_dir"
+"$env_root/bin/python" -u experiments/maxloss_v1/prepare_students.py \
+    --generation-dir "$GENERATION_DIR" --working-dir "$student_dir" --seed "$seed" \
+    --student-model "$STUDENT_MODEL" --student-tokenizer "$STUDENT_TOKENIZER"
+"$env_root/bin/python" -u -m experiments.maxloss_v1.train_transfer_students \
+    --config "$student_dir/config.yaml" --seed "$seed"
+cat "$student_dir/iter_0/instructions_and_scores.yaml"

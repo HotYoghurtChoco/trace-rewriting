@@ -35,6 +35,6 @@ printf 'student_model=%s\nstudent_tokenizer=%s\ngeneration_dir=%s\nstudent_resul
 "$env_root/bin/python" -u experiments/maxloss_v1/prepare_students.py \
     --generation-dir "$GENERATION_DIR" --working-dir "$student_dir" --seed "$seed" \
     --student-model "$STUDENT_MODEL" --student-tokenizer "$STUDENT_TOKENIZER"
-"$env_root/bin/python" -u -m experiments.maxloss_v1.train_transfer_students \
+"$env_root/bin/python" -u -m "${STUDENT_MODULE:-experiments.maxloss_v1.train_transfer_students}" \
     --config "$student_dir/config.yaml" --seed "$seed"
 cat "$student_dir/iter_0/instructions_and_scores.yaml"

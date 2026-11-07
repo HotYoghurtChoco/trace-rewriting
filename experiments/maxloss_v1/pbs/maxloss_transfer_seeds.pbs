@@ -18,8 +18,11 @@ export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=8 TRACE_NUM_PROC=4 WANDB_DISABLED=true VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 run_tmp=$(mktemp -d "${TMPDIR:-/tmp}/maxloss-${job_number}-${seed}-XXXXXX")
-trap 'rm -rf -- "$run_tmp"' EXIT
-export TMPDIR="$run_tmp" TRITON_CACHE_DIR="$run_tmp/triton"
+ipc_tmp=''
+trap 'rm -rf -- "$run_tmp" "$ipc_tmp"' EXIT
+# Python appends worker socket names to TMPDIR. Keep code and Triton on PBS scratch.
+ipc_tmp=$(mktemp -d /tmp/ml.XXXXXXXX)
+export TMPDIR="$ipc_tmp" TRITON_CACHE_DIR="$run_tmp/triton"
 code="$run_tmp/code"
 mkdir -p "$code" "$TRITON_CACHE_DIR"
 # Read the submitted commit even if the shared checkout advances while queued.

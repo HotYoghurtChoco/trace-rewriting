@@ -1,0 +1,80 @@
+candidate_instructions:
+- name: optimized_clean
+  instruction: Input-gradient optimized Clean traces.
+  score: 0.01999999999999999
+  proxy_metrics:
+  - model: /srv/scratch/z5463756/honour/models/llama-3.2-3b-base
+    evaluation_mode: vllm_dynamic_lora
+    clean_raw_accuracy: 0.15
+    clean_af_accuracy: 0.19
+    clean_raw_token_cap_count: 21
+    candidate_raw_accuracy: 0.16
+    candidate_af_accuracy: 0.17
+    candidate_raw_token_cap_count: 21
+    accuracy_drop: 0.01999999999999999
+    clean_evaluation:
+      num_examples: 100
+      raw_accuracy: 0.15
+      af_accuracy: 0.19
+      raw_finish_reason_counts:
+        stop: 79
+        length: 21
+      raw_token_cap_count: 21
+      raw_num_tokens_stats:
+        count: 100.0
+        mean: 336.17
+        std: 367.39231377673406
+        min: 21.0
+        25%: 101.0
+        50%: 154.5
+        75%: 285.25
+        max: 1024.0
+      mmlu_subject_accuracies: null
+      trace_len_stats:
+        count: 100.0
+        mean: 336.38
+        std: 367.7894594256971
+        min: 21.0
+        25%: 101.0
+        50%: 154.5
+        75%: 285.25
+        max: 1025.0
+      evaluation_mode: vllm_dynamic_lora
+      base_model: /srv/scratch/z5463756/honour/models/llama-3.2-3b-base
+      adapter: /srv/scratch/z5463756/honour/results/maxloss-llama3.2-3b-v1/students_seed_889_9696436/clean_comparators/llama-3.2-3b-base/adapter
+      tokenizer: /srv/scratch/z5463756/honour/models/llama-3.2-3b-instruct-tokenizer
+      inference_dtype: bfloat16
+      adapter_rank: 16
+    candidate_evaluation:
+      num_examples: 100
+      raw_accuracy: 0.16
+      af_accuracy: 0.17
+      raw_finish_reason_counts:
+        stop: 79
+        length: 21
+      raw_token_cap_count: 21
+      raw_num_tokens_stats:
+        count: 100.0
+        mean: 340.32
+        std: 364.2106416830122
+        min: 38.0
+        25%: 107.5
+        50%: 154.0
+        75%: 350.5
+        max: 1024.0
+      mmlu_subject_accuracies: null
+      trace_len_stats:
+        count: 100.0
+        mean: 340.53
+        std: 364.60883855375084
+        min: 38.0
+        25%: 107.5
+        50%: 154.0
+        75%: 350.5
+        max: 1025.0
+      evaluation_mode: vllm_dynamic_lora
+      base_model: /srv/scratch/z5463756/honour/models/llama-3.2-3b-base
+      adapter: /srv/scratch/z5463756/honour/results/maxloss-llama3.2-3b-v1/students_seed_889_9696436/optimized_clean/finetuned_model/llama-3.2-3b-base/adapter
+      tokenizer: /srv/scratch/z5463756/honour/models/llama-3.2-3b-instruct-tokenizer
+      inference_dtype: bfloat16
+      adapter_rank: 16

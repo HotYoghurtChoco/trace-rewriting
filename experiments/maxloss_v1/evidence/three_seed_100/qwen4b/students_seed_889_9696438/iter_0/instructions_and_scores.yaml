@@ -1,0 +1,80 @@
+candidate_instructions:
+- name: optimized_clean
+  instruction: Input-gradient optimized Clean traces.
+  score: 0.07999999999999996
+  proxy_metrics:
+  - model: /srv/scratch/z5463756/honour/models/qwen3-4b-base-906bfd4b4dc7
+    evaluation_mode: vllm_dynamic_lora
+    clean_raw_accuracy: 0.33
+    clean_af_accuracy: 0.42
+    clean_raw_token_cap_count: 97
+    candidate_raw_accuracy: 0.22
+    candidate_af_accuracy: 0.34
+    candidate_raw_token_cap_count: 99
+    accuracy_drop: 0.07999999999999996
+    clean_evaluation:
+      num_examples: 100
+      raw_accuracy: 0.33
+      af_accuracy: 0.42
+      raw_finish_reason_counts:
+        length: 97
+        stop: 3
+      raw_token_cap_count: 97
+      raw_num_tokens_stats:
+        count: 100.0
+        mean: 1005.03
+        std: 108.62273279939185
+        min: 357.0
+        25%: 1024.0
+        50%: 1024.0
+        75%: 1024.0
+        max: 1024.0
+      mmlu_subject_accuracies: null
+      trace_len_stats:
+        count: 100.0
+        mean: 1005.0
+        std: 108.7938463797517
+        min: 356.0
+        25%: 1024.0
+        50%: 1024.0
+        75%: 1024.0
+        max: 1024.0
+      evaluation_mode: vllm_dynamic_lora
+      base_model: /srv/scratch/z5463756/honour/models/qwen3-4b-base-906bfd4b4dc7
+      adapter: /srv/scratch/z5463756/honour/results/maxloss-qwen3-4b-v1/students_seed_889_9696438/clean_comparators/qwen3-4b-base-906bfd4b4dc7/adapter
+      tokenizer: /srv/scratch/z5463756/honour/models/qwen3-4b-tokenizer-1cfa9a720891
+      inference_dtype: bfloat16
+      adapter_rank: 16
+    candidate_evaluation:
+      num_examples: 100
+      raw_accuracy: 0.22
+      af_accuracy: 0.34
+      raw_finish_reason_counts:
+        length: 99
+        stop: 1
+      raw_token_cap_count: 99
+      raw_num_tokens_stats:
+        count: 100.0
+        mean: 1016.62
+        std: 73.80000000000005
+        min: 286.0
+        25%: 1024.0
+        50%: 1024.0
+        75%: 1024.0
+        max: 1024.0
+      mmlu_subject_accuracies: null
+      trace_len_stats:
+        count: 100.0
+        mean: 1016.61
+        std: 73.90000000000002
+        min: 285.0
+        25%: 1024.0
+        50%: 1024.0
+        75%: 1024.0
+        max: 1024.0
+      evaluation_mode: vllm_dynamic_lora
+      base_model: /srv/scratch/z5463756/honour/models/qwen3-4b-base-906bfd4b4dc7
+      adapter: /srv/scratch/z5463756/honour/results/maxloss-qwen3-4b-v1/students_seed_889_9696438/optimized_clean/finetuned_model/qwen3-4b-base-906bfd4b4dc7/adapter
+      tokenizer: /srv/scratch/z5463756/honour/models/qwen3-4b-tokenizer-1cfa9a720891
+      inference_dtype: bfloat16
+      adapter_rank: 16

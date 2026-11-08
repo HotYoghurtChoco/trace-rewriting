@@ -1,0 +1,10 @@
+{
+  "generation_dir": "/srv/scratch/z5463756/honour/results/maxloss-qwen3-1.7b-v1/formal_9679942",
+  "seed": 888,
+  "rows": 100,
+  "trace_optimization_model": "/srv/scratch/z5463756/honour/models/qwen3-1.7b-base-ea980cb0a6c2",
+  "student_model": "/srv/scratch/z5463756/honour/models/qwen3-4b-base-906bfd4b4dc7",
+  "student_tokenizer": "/srv/scratch/z5463756/honour/models/qwen3-4b-tokenizer-1cfa9a720891",
+  "training_order": "both arms use the same seed137 permutation before Trainer shuffling",
+  "primary_contrast": "clean_af_minus_optimized_clean_af"
+}

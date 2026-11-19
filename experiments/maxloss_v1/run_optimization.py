@@ -40,13 +40,34 @@ def answer_status(solution, trace):
         return {"correct": False, "error": f"{type(error).__name__}: {error}"}
 
 
+def load_fixed_student(config, instruction):
+    import torch
+    from transformers import AutoModelForCausalLM
+    from optimize.score_candidates import _load_training_tokenizer, _align_model_special_tokens, _tokenize_completion_only_batch
+    from experiments.maxloss_v1.optimizer import FixedStudent
+
+    tokenizer = _load_training_tokenizer(config["tokenizer"])
+    model = AutoModelForCausalLM.from_pretrained(
+        config["base_model"], torch_dtype=getattr(torch, config["dtype"]),
+        attn_implementation=config["attention_implementation"],
+        local_files_only=True, low_cpu_mem_usage=True,
+    ).to("cuda")
+    _align_model_special_tokens(model, tokenizer)
+
+    def encode(problem, trace):
+        return _tokenize_completion_only_batch(
+            tokenizer, instruction, [problem], [trace], config["base_model"]
+        )
+
+    return tokenizer, FixedStudent(model, encode, max_tokens=int(config["maximum_total_tokens"]))
+
+
 def run(args):
     import torch
     import yaml
     from datasets import Dataset, load_from_disk
-    from transformers import AutoModelForCausalLM, set_seed
-    from optimize.score_candidates import _load_training_tokenizer, _align_model_special_tokens, _tokenize_completion_only_batch
-    from experiments.maxloss_v1.optimizer import FixedStudent, UnscorableTrace, optimize_trace
+    from transformers import set_seed
+    from experiments.maxloss_v1.optimizer import UnscorableTrace, optimize_trace
     from experiments.maxloss_v1.text_edits import POLICY_VERSION, answer_start, propose_edits
 
     config = yaml.safe_load(args.config.read_text())
@@ -65,20 +86,8 @@ def run(args):
     if not torch.cuda.is_available():
         raise RuntimeError("Run this experiment in a Katana GPU job")
 
-    tokenizer = _load_training_tokenizer(config["tokenizer"])
-    model = AutoModelForCausalLM.from_pretrained(
-        config["base_model"], torch_dtype=getattr(torch, config["dtype"]),
-        attn_implementation=config["attention_implementation"],
-        local_files_only=True, low_cpu_mem_usage=True,
-    ).to("cuda")
-    _align_model_special_tokens(model, tokenizer)
-
-    def encode(problem, trace):
-        return _tokenize_completion_only_batch(
-            tokenizer, instruction, [problem], [trace], config["base_model"]
-        )
-
-    student = FixedStudent(model, encode, max_tokens=int(config["maximum_total_tokens"]))
+    tokenizer, student = load_fixed_student(config, instruction)
+    model = student.model
     # Metadata describes the actual runtime. It does not rerun historical audits.
     commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True)
     metadata = {

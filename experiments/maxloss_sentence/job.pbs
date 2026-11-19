@@ -1,0 +1,83 @@
+#!/bin/bash
+# Resources and dependencies are set by submit.sh.
+set -euo pipefail
+cd "$RUN_DIR/code"
+module purge
+module load gcc/12.2.0 python/3.11.3 cuda/12.8.0
+env_root="$HONOUR_SCRATCH/envs/trace-rewriting-official"
+python="$env_root/bin/python"
+export PATH="$env_root/bin:$PATH" PYTHONPATH="$PWD:$PWD/src"
+export HF_HOME="$HONOUR_SCRATCH/cache/huggingface" XDG_CACHE_HOME="$HONOUR_SCRATCH/cache"
+export HF_HUB_CACHE="$HF_HOME/hub" HF_DATASETS_CACHE="$HF_HOME/datasets"
+export HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+export TRACE_NUM_PROC=4 OMP_NUM_THREADS=8 WANDB_DISABLED=true VLLM_WORKER_MULTIPROC_METHOD=spawn
+echo "job=$PBS_JOBID stage=$STAGE run=$RUN_DIR array=${PBS_ARRAY_INDEX:-0}"
+
+if [[ "$STAGE" == collect || "$STAGE" == summary ]]; then
+    exec 8>"$RUN_DIR/.$STAGE.lock"
+    flock -x 8
+    exec "$python" -u -m experiments.maxloss_sentence.workflow "$STAGE" "$RUN_DIR"
+fi
+# Keep multiprocessing socket paths short on Katana's worker nodes.
+job_tmp=$(mktemp -d /tmp/mls.XXXXXXXX)
+server_pid=
+cleanup() {
+    if [[ -n "$server_pid" ]]; then
+        kill -TERM -- "-$server_pid" 2>/dev/null || true
+        for _ in {1..10}; do kill -0 "$server_pid" 2>/dev/null || break; sleep 1; done
+        kill -KILL -- "-$server_pid" 2>/dev/null || true
+        wait "$server_pid" 2>/dev/null || true
+    fi
+    rm -rf -- "$job_tmp"
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+export TMPDIR="$job_tmp" TRITON_CACHE_DIR="$job_tmp/triton"
+IFS=: read -ra task_ids <<< "$TASK_IDS"
+task=${task_ids[${PBS_ARRAY_INDEX:-0}]}
+if [[ "$STAGE" == student ]]; then
+    exec 8>"$RUN_DIR/.student-$task.lock"
+    flock -x 8
+    "$python" -u -m experiments.maxloss_sentence.workflow student "$RUN_DIR" --index "$task"
+    exit
+fi
+[[ "$STAGE" == rewrite ]]
+shard=$task
+exec 8>"$RUN_DIR/parts/.$shard.lock"
+flock -x 8
+printf -v part '%03d' "$shard"
+[[ ! -f "$RUN_DIR/parts/$part.jsonl" ]] || exit 0
+port=$("$python" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+url="http://127.0.0.1:$port"
+# Use the existing Stage 6C installation of the pinned x86_64 vLLM image.
+images=("$HONOUR_SCRATCH"/containers/vllm-*-v0.11.0-x86_64.sif)
+if (( ${#images[@]} != 1 )) || [[ ! -f "${images[0]}" ]]; then
+    echo "Expected one installed vLLM 0.11.0 x86_64 image in $HONOUR_SCRATCH/containers" >&2
+    exit 1
+fi
+read -r model_id revision < <("$python" -c 'from experiments.maxloss_sentence.rewriter import MODEL, REVISION; print(MODEL, REVISION)')
+snapshot="$HF_HUB_CACHE/models--${model_id//\//--}/snapshots/$revision"
+export TRITON_CACHE_DIR="$HONOUR_SCRATCH/cache/triton/stage6c3"
+ulimit -n 65535 2>/dev/null || true
+log="$RUN_DIR/logs/server-$PBS_JOBID-$shard.log"
+mkdir -p "$TRITON_CACHE_DIR" "$HONOUR_SCRATCH/cache/vllm"
+setsid /bin/apptainer exec --nv --cleanenv --bind "$HONOUR_SCRATCH:$HONOUR_SCRATCH" \
+    --env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}" --env "HF_HOME=$HF_HOME" \
+    --env "HF_HUB_CACHE=$HF_HUB_CACHE" --env "HF_DATASETS_CACHE=$HF_DATASETS_CACHE" \
+    --env HF_HUB_OFFLINE=1 --env HF_DATASETS_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
+    --env VLLM_NO_USAGE_STATS=1 --env TOKENIZERS_PARALLELISM=false \
+    --env "XDG_CACHE_HOME=$HONOUR_SCRATCH/cache/vllm" --env "TRITON_CACHE_DIR=$TRITON_CACHE_DIR" \
+    "${images[0]}" vllm serve "$snapshot" --served-model-name "$model_id" \
+    --host 127.0.0.1 --port "$port" --tensor-parallel-size 1 --gpu-memory-utilization 0.75 \
+    --max-model-len 8192 --dtype bfloat16 --quantization mxfp4 --load-format safetensors \
+    --model-impl vllm --seed 0 --reasoning-parser openai_gptoss > "$log" 2>&1 &
+server_pid=$!
+for _ in {1..240}; do
+    curl -fsS "$url/health" >/dev/null 2>&1 && break
+    if ! kill -0 "$server_pid" 2>/dev/null; then tail -40 "$log" >&2; exit 1; fi
+    sleep 5
+done
+curl -fsS "$url/health" >/dev/null
+"$python" -u -m experiments.maxloss_sentence.rewrite "$RUN_DIR" "$shard" "$url/v1"

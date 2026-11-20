@@ -15,14 +15,27 @@ PROPOSE = (
     'new claim, a label or commentary.'
 )
 JUDGE = (
-    'For each replacement in order, compare it to the specified source sentence in context. '
-    'Check both directions: all original facts must survive and no new claim may be introduced. '
-    'Check the entity, owner, unit, time, operation, comparison direction and scope of every '
-    'quantity. The same final answer alone is insufficient. Rate the meaning from 1 to 5: '
-    '5 = fully equivalent, 4 = minor fact missing or uncertain, 3 = material change, '
-    '2 = contradicts an important fact, 1 = unrelated. Return {"ratings":[...]} with one '
-    'integer per replacement in the original order.'
+    'Interpret the source sentence and each replacement independently at the same point in '
+    'the solution. Use the problem and surrounding sentences to resolve references. Read '
+    'what each sentence actually says, without repairing it to fit the intended answer. '
+    'State the source claim once and each replacement claim in one short clause or equation. '
+    'Name the entities involved. For a quantity, specify what it measures and its unit. '
+    'For a proportion or rate, name the reference group or amount that supplies its denominator. '
+    'Preserve who did what, time, operations and the direction of comparisons. '
+    'Compare each claim to the source in both directions. Different wording can express the '
+    'same relation. Matching numbers or a matching final answer do not establish equivalence. '
+    'Rate 5 only when all facts and relations are equivalent, 4 for a minor omission or '
+    'uncertainty, 3 for a material change (including a different reference amount), '
+    '2 for a contradiction and 1 for an unrelated claim. '
+    'Return one JSON object with source_claim (string) and judgments (an array in the '
+    'original replacement order). Each judgment has claim (string) and rating (integer).'
 )
+
+
+def round_seeds(index, round_number):
+    """Return the existing proposal and judge seeds for a one-based editing round."""
+    proposal = 888 + 100 * index + 4 * (round_number - 1)
+    return proposal, proposal + 2
 
 
 class BadReply(ValueError):
@@ -56,13 +69,23 @@ class Rewriter:
                     raise ValueError(f"finish_reason={choice['finish_reason']}")
                 content = choice["message"]["content"].strip()
                 content = re.sub(r"^\x60{3}(?:json)?\s*|\s*\x60{3}$", "", content)
-                values = json.loads(content)[key]
+                result = json.loads(content)
+                values = result[key]
                 if not isinstance(values, list) or len(values) != size:
                     raise ValueError(f"Expected {size} {key}")
                 if key == "sentences" and all(isinstance(v, str) and v.strip() for v in values):
                     return [v.strip() for v in values]
-                if key == "ratings" and all(type(v) is int and 1 <= v <= 5 for v in values):
-                    return values
+                if key == "judgments":
+                    source_claim = result["source_claim"]
+                    if not isinstance(source_claim, str) or not source_claim.strip():
+                        raise ValueError("Missing source claim")
+                    for judgment in values:
+                        claim, rating = judgment["claim"], judgment["rating"]
+                        if not isinstance(claim, str) or not claim.strip():
+                            raise ValueError("Missing replacement claim")
+                        if type(rating) is not int or not 1 <= rating <= 5:
+                            raise ValueError("Invalid semantic rating")
+                    return result
                 raise ValueError(f"Invalid {key}")
             except (KeyError, IndexError, TypeError, AttributeError, ValueError) as error:
                 last_error = error
@@ -72,6 +95,10 @@ class Rewriter:
         data = {"problem": problem, "solution": trace, "source_sentence": sentence}
         return self._ask(PROPOSE, data, "sentences", 3, seed)
 
-    def judge(self, problem, trace, sentence, candidates, seed):
+    def assess(self, problem, trace, sentence, candidates, seed):
         data = {"problem": problem, "solution": trace, "source_sentence": sentence, "replacements": candidates}
-        return self._ask(JUDGE, data, "ratings", len(candidates), seed)
+        return self._ask(JUDGE, data, "judgments", len(candidates), seed)
+
+    def judge(self, problem, trace, sentence, candidates, seed):
+        assessment = self.assess(problem, trace, sentence, candidates, seed)
+        return [item["rating"] for item in assessment["judgments"]]

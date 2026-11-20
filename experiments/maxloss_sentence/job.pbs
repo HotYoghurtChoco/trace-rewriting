@@ -43,12 +43,15 @@ if [[ "$STAGE" == student ]]; then
     "$python" -u -m experiments.maxloss_sentence.workflow student "$RUN_DIR" --index "$task"
     exit
 fi
-[[ "$STAGE" == rewrite ]]
 shard=$task
-exec 8>"$RUN_DIR/parts/.$shard.lock"
-flock -x 8
-printf -v part '%03d' "$shard"
-[[ ! -f "$RUN_DIR/parts/$part.jsonl" ]] || exit 0
+if [[ "$STAGE" == rewrite ]]; then
+    exec 8>"$RUN_DIR/parts/.$shard.lock"
+    flock -x 8
+    printf -v part '%03d' "$shard"
+    [[ ! -f "$RUN_DIR/parts/$part.jsonl" ]] || exit 0
+else
+    [[ "$STAGE" == check-judge ]]
+fi
 port=$("$python" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 url="http://127.0.0.1:$port"
 # Use the existing Stage 6C installation of the pinned x86_64 vLLM image.
@@ -80,4 +83,9 @@ for _ in {1..240}; do
     sleep 5
 done
 curl -fsS "$url/health" >/dev/null
-"$python" -u -m experiments.maxloss_sentence.rewrite "$RUN_DIR" "$shard" "$url/v1"
+if [[ "$STAGE" == check-judge ]]; then
+    "$python" -u -m experiments.maxloss_sentence.check_judge \
+        "$JUDGE_RECORDS" "$JUDGE_ROW" "$JUDGE_ROUND" "$url/v1" | tee "$RUN_DIR/judgments.json"
+else
+    "$python" -u -m experiments.maxloss_sentence.rewrite "$RUN_DIR" "$shard" "$url/v1"
+fi

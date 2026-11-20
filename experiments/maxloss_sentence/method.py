@@ -5,7 +5,7 @@ from difflib import SequenceMatcher
 import re
 
 from experiments.maxloss_sentence.data import ROUNDS, MIN_GAIN
-from experiments.maxloss_sentence.rewriter import BadReply
+from experiments.maxloss_sentence.rewriter import BadReply, round_seeds
 from experiments.maxloss_v1.optimizer import UnscorableTrace
 from experiments.maxloss_v1.text_edits import NUMBER, answer_start, protected_spans
 
@@ -144,13 +144,13 @@ def optimize_sentence(student, tokenizer, rewriter, instruction, row, index, max
         remaining.remove(span)
         a, b = span
         source = current[a:b]
-        seed = 888 + 100 * index + 4 * turn
+        proposal_seed, judge_seed = round_seeds(index, turn + 1)
         trials, pending = [], []
         record = {"round": turn + 1, "source": source, "start": a, "mean_gradient_norm": strength,
                   "proposals": trials, "accepted": None, "loss_before": current_loss, "loss_after": current_loss}
         history.append(record)
         try:
-            alternatives = rewriter.propose(problem, current, source, seed)
+            alternatives = rewriter.propose(problem, current, source, proposal_seed)
         except BadReply as error:
             record["format_error"] = str(error)
             continue
@@ -175,7 +175,7 @@ def optimize_sentence(student, tokenizer, rewriter, instruction, row, index, max
                     continue
             pending.append((trial, candidate, encoded))
         try:
-            scores = (rewriter.judge(problem, current, source, [t["sentence"] for t, _, _ in pending], seed + 2)
+            scores = (rewriter.judge(problem, current, source, [t["sentence"] for t, _, _ in pending], judge_seed)
                       if pending else [])
         except BadReply as error:
             record["format_error"] = str(error)

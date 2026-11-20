@@ -2,10 +2,24 @@
 # Submit one cohort. The full run is requested separately after the prior test.
 set -euo pipefail
 profile=${1:-prior-test}
-case "$profile" in prior-test|full) ;; *) echo "Usage: bash $0 {prior-test|full}" >&2; exit 2 ;; esac
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 export HONOUR_SCRATCH=${HONOUR_SCRATCH:-/srv/scratch/$USER/honour}
 root=${MAXLOSS_RESULTS:-$HONOUR_SCRATCH/results/maxloss-sentence-v1}
+if [[ "$profile" == check-judge ]]; then
+    export JUDGE_ROW=${2:?Supply the one-based row number} JUDGE_ROUND=${3:?Supply the round number}
+    export JUDGE_RECORDS="$root/prior-test/parts/000.jsonl"
+    export RUN_DIR
+    RUN_DIR=$(mktemp -d "$root/judge-check.XXXXXXXX")
+    mkdir "$RUN_DIR/logs"
+    ln -s "$repo" "$RUN_DIR/code"
+    qsub -N ml-sent-judge -j oe -o "$RUN_DIR/logs/" \
+        -l select=1:ncpus=8:ngpus=1:mem=128gb:gpu_model=H200 -l walltime=00:12:00 \
+        -v HONOUR_SCRATCH,RUN_DIR,STAGE=check-judge,TASK_IDS=0,JUDGE_RECORDS,JUDGE_ROW,JUDGE_ROUND \
+        "$repo/experiments/maxloss_sentence/job.pbs"
+    echo "Result: $RUN_DIR/judgments.json"
+    exit 0
+fi
+case "$profile" in prior-test|full) ;; *) echo "Usage: bash $0 {prior-test|full|check-judge ROW ROUND}" >&2; exit 2 ;; esac
 mkdir -p "$root/$profile/logs"
 export RUN_DIR
 RUN_DIR=$(cd "$root/$profile" && pwd)

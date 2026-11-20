@@ -1,0 +1,40 @@
+#!/bin/bash
+#PBS -N ml-q4-first889
+#PBS -l select=1:ncpus=8:ngpus=1:mem=56gb:gpu_model=H200
+#PBS -l walltime=00:10:00
+#PBS -j oe
+set -euo pipefail
+export HONOUR_SCRATCH=${HONOUR_SCRATCH:-/srv/scratch/$USER/honour}
+export MAXLOSS_RESULTS=${MAXLOSS_RESULTS:-$HONOUR_SCRATCH/results/maxloss-sentence-v1}
+prior="$MAXLOSS_RESULTS/prior-test"
+output="$MAXLOSS_RESULTS/first-accepted-qwen4b-889"
+
+if [[ ${1:-} == submit ]]; then
+    cd "$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+    mkdir -p "$output"
+    if [[ -s "$output/comparison.json" ]]; then
+        cat "$output/comparison.json"
+        exit 0
+    fi
+    SOURCE_COMMIT=$(git rev-parse HEAD)
+    export SOURCE_COMMIT
+    qsub -o "$output/" -v HONOUR_SCRATCH,MAXLOSS_RESULTS,SOURCE_COMMIT experiments/maxloss_sentence/first_accepted.pbs
+    echo "Result: $output/comparison.json"
+    exit 0
+fi
+
+module purge
+module load gcc/12.2.0 python/3.11.3 cuda/12.8.0
+env_root="$HONOUR_SCRATCH/envs/trace-rewriting-official"
+export PATH="$env_root/bin:$PATH" PYTHONPATH="$prior/code:$prior/code/src"
+export HF_HOME="$HONOUR_SCRATCH/cache/huggingface" XDG_CACHE_HOME="$HONOUR_SCRATCH/cache"
+export HF_HUB_CACHE="$HF_HOME/hub" HF_DATASETS_CACHE="$HF_HOME/datasets"
+export HF_DATASETS_OFFLINE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export TOKENIZERS_PARALLELISM=false PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+export TRACE_NUM_PROC=4 OMP_NUM_THREADS=8 WANDB_DISABLED=true VLLM_WORKER_MULTIPROC_METHOD=spawn
+job_tmp=$(mktemp -d /tmp/mlfirst.XXXXXXXX)
+trap 'rm -rf -- "$job_tmp"' EXIT
+export TMPDIR="$job_tmp" TRITON_CACHE_DIR="$job_tmp/triton"
+git -C "$PBS_O_WORKDIR" show "$SOURCE_COMMIT:experiments/maxloss_sentence/first_accepted.py" > "$job_tmp/first_accepted.py"
+cd "$output"
+flock "$output/.student.lock" "$env_root/bin/python" -u "$job_tmp/first_accepted.py" "$prior" "$output"

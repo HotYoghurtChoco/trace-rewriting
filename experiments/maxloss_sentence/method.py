@@ -175,16 +175,16 @@ def optimize_sentence(student, tokenizer, rewriter, instruction, row, index, max
                     continue
             pending.append((trial, candidate, encoded))
         try:
-            scores = (rewriter.judge(problem, current, source, [t["sentence"] for t, _, _ in pending], judge_seed)
-                      if pending else [])
+            judgments = (rewriter.assess(problem, current, source, [t["sentence"] for t, _, _ in pending],
+                                         judge_seed)["judgments"] if pending else [])
         except BadReply as error:
             record["format_error"] = str(error)
             continue
         best = None
-        for (trial, candidate, encoded), similarity in zip(pending, scores, strict=True):
-            trial["semantic_rating"] = similarity
-            if similarity != 5:
-                trial["status"] = "meaning_changed_or_uncertain"
+        for (trial, candidate, encoded), judgment in zip(pending, judgments, strict=True):
+            trial["semantic_rating"] = judgment["rating"]
+            if judgment["rejection"] is not None:
+                trial["status"] = judgment["rejection"]
                 continue
             if not answer_status(row["solution"], candidate)["correct"]:
                 trial["status"] = "answer_check"

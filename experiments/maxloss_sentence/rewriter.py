@@ -18,17 +18,27 @@ JUDGE = (
     'Interpret the source sentence and each replacement independently at the same point in '
     'the solution. Use the problem and surrounding sentences to resolve references. Read '
     'what each sentence actually says, without repairing it to fit the intended answer. '
-    'State the source claim once and each replacement claim in one short clause or equation. '
-    'Name the entities involved. For a quantity, specify what it measures and its unit. '
-    'For a proportion or rate, name the reference group or amount that supplies its denominator. '
+    'First inventory the reference groups or amounts relevant to any proportional share in '
+    'these sentences. Include the original population and any restricted population that '
+    'could supply the base. Assign a short ID to each distinct group. Describe its membership '
+    'and give its size and unit if derivable. Reuse an ID for the same group under other wording. '
+    'For each proportional share, including one expressed in words, ask what would count '
+    'as 100% of the base of this expression, holding prior facts fixed. Distinguish the group '
+    'being described by the share from the group the share is taken OF. Identify the base '
+    'from that sentence, without back-solving from the reported result. Express the claim '
+    'as rate times that specific base when applicable. If the wording admits different bases '
+    'in context, record null for its base. '
     'Preserve who did what, time, operations and the direction of comparisons. '
-    'Compare each claim to the source in both directions. Different wording can express the '
-    'same relation. Matching numbers or a matching final answer do not establish equivalence. '
+    'Check the entity, unit and scope of every quantity. Compare facts in both directions. '
     'Rate 5 only when all facts and relations are equivalent, 4 for a minor omission or '
-    'uncertainty, 3 for a material change (including a different reference amount), '
-    '2 for a contradiction and 1 for an unrelated claim. '
-    'Return one JSON object with source_claim (string) and judgments (an array in the '
-    'original replacement order). Each judgment has claim (string) and rating (integer).'
+    'uncertainty, 3 for a material change, 2 for a contradiction and 1 for an unrelated claim. '
+    'Return JSON. groups is an object mapping group IDs to description strings. source_claim '
+    'is a string. source_bases maps one slot ID per source share to its base group ID or null. '
+    'In judgments, return one object per replacement, in order, with claim (string), '
+    'bases (object) and rating (integer). '
+    'In bases reuse each source slot ID for the corresponding share even if clauses move. '
+    'Omit a removed share and give an added share a new slot ID. Use {} for a sentence '
+    'with no shares, and {} for groups if there are none. Keep descriptions brief.'
 )
 
 
@@ -40,6 +50,43 @@ def round_seeds(index, round_number):
 
 class BadReply(ValueError):
     """The endpoint replied, but did not supply the requested structured output."""
+
+
+def _read_bases(bindings, groups):
+    if not isinstance(bindings, dict):
+        raise ValueError("Expected a mapping from share IDs to base group IDs")
+    for group in bindings.values():
+        if group is not None and (not isinstance(group, str) or group not in groups):
+            raise ValueError("Base refers to an undefined group")
+    return bindings
+
+
+def _assess_judgments(result, data):
+    if not isinstance(result["source_claim"], str) or not result["source_claim"].strip():
+        raise ValueError("Missing source claim")
+    groups = result["groups"]
+    if not isinstance(groups, dict) or not all(isinstance(v, str) and v.strip() for v in groups.values()):
+        raise ValueError("Expected reference groups with descriptions")
+    source = _read_bases(result["source_bases"], groups)
+    # A literal percent sign requires a base even if the model omits that share.
+    source_unknown = None in source.values() or len(source) < data["source_sentence"].count("%")
+    for sentence, item in zip(data["replacements"], result["judgments"], strict=True):
+        rating, claim = item["rating"], item["claim"]
+        if type(rating) is not int or not 1 <= rating <= 5:
+            raise ValueError("Invalid semantic rating")
+        if not isinstance(claim, str) or not claim.strip():
+            raise ValueError("Missing replacement claim")
+        bases = _read_bases(item["bases"], groups)
+        if source_unknown or None in bases.values() or len(bases) < sentence.count("%"):
+            rejection = "reference_base_uncertain"
+        elif bases != source:
+            rejection = "reference_base_changed"
+        elif rating != 5:
+            rejection = "meaning_changed_or_uncertain"
+        else:
+            rejection = None
+        item["rejection"] = rejection
+    return result
 
 
 class Rewriter:
@@ -76,16 +123,7 @@ class Rewriter:
                 if key == "sentences" and all(isinstance(v, str) and v.strip() for v in values):
                     return [v.strip() for v in values]
                 if key == "judgments":
-                    source_claim = result["source_claim"]
-                    if not isinstance(source_claim, str) or not source_claim.strip():
-                        raise ValueError("Missing source claim")
-                    for judgment in values:
-                        claim, rating = judgment["claim"], judgment["rating"]
-                        if not isinstance(claim, str) or not claim.strip():
-                            raise ValueError("Missing replacement claim")
-                        if type(rating) is not int or not 1 <= rating <= 5:
-                            raise ValueError("Invalid semantic rating")
-                    return result
+                    return _assess_judgments(result, data)
                 raise ValueError(f"Invalid {key}")
             except (KeyError, IndexError, TypeError, AttributeError, ValueError) as error:
                 last_error = error
@@ -100,5 +138,6 @@ class Rewriter:
         return self._ask(JUDGE, data, "judgments", len(candidates), seed)
 
     def judge(self, problem, trace, sentence, candidates, seed):
+        """Return raw model ratings. assess() also returns each eligibility decision."""
         assessment = self.assess(problem, trace, sentence, candidates, seed)
         return [item["rating"] for item in assessment["judgments"]]

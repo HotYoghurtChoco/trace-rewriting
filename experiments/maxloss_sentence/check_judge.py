@@ -33,10 +33,12 @@ def check(records, row_number, round_number, rewriter):
         raise ValueError(f"Row {row_number} is absent from {records}")
     inputs = round_input(row, round_number)
     assessment = rewriter.assess(**inputs)
-    candidates = [dict(sentence=sentence, claim=item["claim"], rating=item["rating"])
+    candidates = [dict(sentence=sentence, claim=item["claim"], bases=item["bases"],
+                       rating=item["rating"], eligible=item["rejection"] is None, rejection=item["rejection"])
                   for sentence, item in zip(inputs["candidates"], assessment["judgments"], strict=True)]
     return {"row": row_number, "round": round_number, "source": inputs["sentence"],
-            "source_claim": assessment["source_claim"], "candidates": candidates}
+            "source_claim": assessment["source_claim"], "groups": assessment["groups"],
+            "source_bases": assessment["source_bases"], "candidates": candidates}
 
 
 if __name__ == "__main__":

@@ -106,7 +106,7 @@ class Rewriter:
                              {"role": "user", "content": json.dumps(data, ensure_ascii=False)}],
                 "temperature": 0.6 if key == "sentences" else 0.0,
                 "seed": seed + retry, "reasoning_effort": "medium",
-                "max_tokens": 1024, "stream": False,
+                "max_tokens": 4096 if key == "judgments" else 1024, "stream": False,
             }
             # Transport failures stop the job. Completed rows remain reusable.
             response = self.request(self.endpoint, payload)

@@ -1,0 +1,37 @@
+{
+  "profile": "full",
+  "train": 5231,
+  "eval": 1209,
+  "source_commit": "01bc44a2c9e827cfea5bcf9a4fbe05b267cf524c",
+  "train_source": "data/gsm8k/semantic:original_trace",
+  "eval_source": "/srv/scratch/z5463756/honour/datasets/gsm8k-platinum-test-8749461e",
+  "platinum_path": "/srv/scratch/z5463756/honour/datasets/gsm8k-platinum-test-8749461e",
+  "max_edit_percent": null,
+  "scorer_and_student_input_cap": 1280,
+  "rewriter": "openai/gpt-oss-120b",
+  "rewriter_revision": "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
+  "rewrite_seed": 888,
+  "student_checkpoints": {
+    "qwen1p7b": [
+      "qwen3-1.7b-base-ea980cb0a6c2",
+      "qwen3-1.7b-tokenizer-70d244cc86cc"
+    ],
+    "llama3b": [
+      "llama-3.2-3b-base",
+      "llama-3.2-3b-instruct-tokenizer"
+    ],
+    "qwen4b": [
+      "qwen3-4b-base-906bfd4b4dc7",
+      "qwen3-4b-tokenizer-1cfa9a720891"
+    ]
+  },
+  "training_seeds": [
+    888,
+    889,
+    890
+  ],
+  "candidates_per_sentence": 3,
+  "sentence_attempts": 5,
+  "minimum_loss_gain": 0.0001,
+  "reuse_prior_shard": true
+}

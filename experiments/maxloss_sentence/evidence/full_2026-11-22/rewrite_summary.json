@@ -1,0 +1,29 @@
+{
+  "train": 5231,
+  "eval": 1209,
+  "arms": {
+    "word": {
+      "changed": 4557,
+      "paired": 4620,
+      "mean_changed_percent_all_rows": 0.7314353349536589,
+      "mean_loss_before": 0.4900376961538286,
+      "mean_loss_after": 0.5431498243146903
+    },
+    "sentence": {
+      "changed": 4588,
+      "paired": 4620,
+      "mean_changed_percent_all_rows": 8.490778247207999,
+      "mean_loss_before": 0.4900376961538286,
+      "mean_loss_after": 0.6859673876557257
+    }
+  },
+  "semantic_ratings": {
+    "5": 52210,
+    "3": 240,
+    "4": 1078,
+    "2": 113,
+    "1": 8
+  },
+  "malformed_rounds": 0,
+  "eval_questions_also_in_train": 0
+}

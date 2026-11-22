@@ -1,6 +1,8 @@
 #!/bin/bash
 # Resources and dependencies are set by submit.sh.
 set -euo pipefail
+export MAXLOSS_JOB_STARTED=$(date +%s)
+package=${MAXLOSS_PACKAGE:-experiments.maxloss_sentence}
 cd "$RUN_DIR/code"
 module purge
 module load gcc/12.2.0 python/3.11.3 cuda/12.8.0
@@ -17,7 +19,7 @@ echo "job=$PBS_JOBID stage=$STAGE run=$RUN_DIR array=${PBS_ARRAY_INDEX:-0}"
 if [[ "$STAGE" == collect || "$STAGE" == summary ]]; then
     exec 8>"$RUN_DIR/.$STAGE.lock"
     flock -x 8
-    exec "$python" -u -m experiments.maxloss_sentence.workflow "$STAGE" "$RUN_DIR"
+    exec "$python" -u -m "$package.workflow" "$STAGE" "$RUN_DIR"
 fi
 # Keep multiprocessing socket paths short on Katana's worker nodes.
 job_tmp=$(mktemp -d /tmp/mls.XXXXXXXX)
@@ -40,7 +42,7 @@ task=${task_ids[${PBS_ARRAY_INDEX:-0}]}
 if [[ "$STAGE" == student ]]; then
     exec 8>"$RUN_DIR/.student-$task.lock"
     flock -x 8
-    "$python" -u -m experiments.maxloss_sentence.workflow student "$RUN_DIR" --index "$task"
+    "$python" -u -m "$package.workflow" student "$RUN_DIR" --index "$task"
     exit
 fi
 shard=$task
@@ -87,5 +89,5 @@ if [[ "$STAGE" == check-judge ]]; then
     "$python" -u -m experiments.maxloss_sentence.check_judge \
         "$JUDGE_RECORDS" "$JUDGE_ROW" "$JUDGE_ROUND" "$url/v1" | tee "$RUN_DIR/judgments.json"
 else
-    "$python" -u -m experiments.maxloss_sentence.rewrite "$RUN_DIR" "$shard" "$url/v1"
+    "$python" -u -m "$package.rewrite" "$RUN_DIR" "$shard" "$url/v1"
 fi

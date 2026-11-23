@@ -1,0 +1,32 @@
+{
+  "method": "gradient_guided_math_step_compression",
+  "source_commit": "adb4e1183bd86ecf8eabfda720dbd4d0a75c1e72",
+  "profile": "full",
+  "train": 5231,
+  "eval": 1209,
+  "train_source": "data/gsm8k/semantic:original_trace",
+  "paired_clean": "/srv/scratch/z5463756/honour/results/maxloss-sentence-v1/full",
+  "paired_clean_commit": "01bc44a2c9e827cfea5bcf9a4fbe05b267cf524c",
+  "rewrite_seed": 888,
+  "default_student_seed": 888,
+  "student_checkpoints": {
+    "qwen1p7b": [
+      "qwen3-1.7b-base-ea980cb0a6c2",
+      "qwen3-1.7b-tokenizer-70d244cc86cc"
+    ],
+    "llama3b": [
+      "llama-3.2-3b-base",
+      "llama-3.2-3b-instruct-tokenizer"
+    ],
+    "qwen4b": [
+      "qwen3-4b-base-906bfd4b4dc7",
+      "qwen3-4b-tokenizer-1cfa9a720891"
+    ]
+  },
+  "input_cap": 1280,
+  "rewriter": "openai/gpt-oss-120b",
+  "rewriter_revision": "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
+  "rounds": 1,
+  "replacements_per_passage": 2,
+  "minimum_gain_over_compact_base": 0.0001
+}

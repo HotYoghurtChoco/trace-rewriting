@@ -1,0 +1,32 @@
+{
+  "train": 5231,
+  "eval": 1209,
+  "reason_counts": {
+    "maxloss_accepted": 4385,
+    "unverified_original_answer": 616,
+    "no_qualifying_gain": 213,
+    "invalid_base_derivation": 11,
+    "malformed_proposal": 5,
+    "answer_marker_in_steps": 1
+  },
+  "selected": {
+    "A": 1404,
+    "B": 2981,
+    "base": 218,
+    "original": 628
+  },
+  "rewrite_outcome": "loss_selected_alternatives",
+  "validated_compact_bases_used": 4603,
+  "maxloss_alternatives_used": 4385,
+  "alternatives_with_judge_verdict": 9217,
+  "alternatives_scored": 8721,
+  "judge_truncated_responses": 0,
+  "original_body_tokens": 2361400,
+  "training_body_tokens": 758715,
+  "corpus_token_reduction_percent": 67.87011942068264,
+  "mean_completion_loss_on_valid_bases": {
+    "original_loss": 0.49003813688505893,
+    "base_loss": 1.2238220872760932,
+    "final_loss": 1.8293840487236928
+  }
+}
